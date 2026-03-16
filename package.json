@@ -1,0 +1,22 @@
+{
+  "name": "voucher-upload-activation-esb",
+  "version": "1.0.0",
+  "description": "CLI tool to upload voucher CREATE and ACTIVATE files to ESB ERP",
+  "main": "index.js",
+  "scripts": {
+    "create": "node index.js create",
+    "activate": "node index.js activate",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "puppeteer": "^24.39.1",
+    "winston": "^3.17.0"
+  },
+  "overrides": {
+    "yauzl": "^3.2.1"
+  }
+}

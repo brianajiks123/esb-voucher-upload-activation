@@ -1,0 +1,9 @@
+node_modules/
+logs/
+.env
+UserData/
+
+# Ignore Excel files in files/ but keep folder structure
+files/**/*.xlsx
+files/**/*.xls
+!files/**/.gitkeep
