@@ -1,5 +1,5 @@
 {
-  "name": "voucher-upload-activation-esb",
+  "name": "esb-voucher-upload-activation",
   "version": "1.0.0",
   "description": "CLI tool to upload voucher CREATE and ACTIVATE files to ESB ERP",
   "main": "index.js",
