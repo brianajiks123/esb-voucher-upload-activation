@@ -1,9 +1,9 @@
 const { launch } = require('./browser');
-const { click, clickWithEvaluate, typeInto, uploadFile, elementExists, waitForUploadProcess, waitForNavigation } = require('./puppeteerActions');
+const { click, clickWithEvaluate, typeInto, uploadFile, elementExists, waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel } = require('./puppeteerActions');
 const { delay } = require('../utils/delay');
 const logger = require('../utils/logger');
 
-const ESB_BASE_URL = process.env.ESB_BASE_URL || 'https://erp.esb.co.id';
+const ESB_BASE_URL = process.env.ESB_BASE_URL || '';
 
 const UPLOAD_MODES = {
   CREATE:   { codeMode: 1, uploadEl: '#fileUpload',      buttonUpload: '#btnSubmitUpload'   },
@@ -66,7 +66,41 @@ async function uploadVoucherExcelFile(filePath, mode) {
     'process',
     2000
   );
+
+  // Detect failed rows and enrich with error detail from downloaded Excel
+  const hasFailed = resultUpload.toLowerCase().includes('failed') ||
+                    resultUpload.toLowerCase().includes('error');
+
+  let errorDetails = [];
+  if (hasFailed) {
+    logger.warn('Upload mengandung baris gagal — mencoba mengunduh file error...');
+    try {
+      const errorFilePath = await downloadErrorFile();
+      if (errorFilePath) {
+        errorDetails = await parseErrorExcel(errorFilePath);
+        if (errorDetails.length > 0) {
+          logger.warn(`Ditemukan ${errorDetails.length} baris error:`);
+          errorDetails.forEach((e) => {
+            logger.warn(`  Row ${e.row} | ${e.voucherCode} | ${e.branchName}`);
+            e.errorMessages.forEach((msg, i) => logger.warn(`    ${i + 1}. ${msg}`));
+          });
+        }
+      }
+    } catch (dlErr) {
+      logger.error(`Gagal mengunduh/membaca file error: ${dlErr.message}`);
+    }
+  }
+
   await clickWithEvaluate('#close-upload-queue');
+
+  if (hasFailed && errorDetails.length > 0) {
+    const summary = errorDetails.map((e) => {
+      const errList = e.errorMessages.map((msg, i) => `  ${i + 1}. ${msg}`).join('\n');
+      return `Row ${e.row} [${e.voucherCode}]:\n${errList}`;
+    }).join('\n\n');
+    throw new Error(`Upload selesai dengan error:\n${summary}`);
+  }
+
   return resultUpload;
 }
 
