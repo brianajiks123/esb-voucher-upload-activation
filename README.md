@@ -24,7 +24,7 @@ cp .env.example .env
 ```
 
 ```env
-ESB_BASE_URL=https://erp.esb.co.id
+ESB_BASE_URL=erp_base_url
 ESB_USERNAME=your_esb_username
 ESB_PASSWORD=your_esb_password
 LOG_LEVEL=debug
