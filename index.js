@@ -26,7 +26,7 @@ if (!command || !VALID_MODES.includes(command)) {
   process.exit(1);
 }
 
-const mode = command.toUpperCase();
+const mode       = command.toUpperCase();
 const folderPath = path.resolve(__dirname, 'files', command);
 
 console.log('\n╔══════════════════════════════════════════╗');
@@ -39,10 +39,10 @@ console.log(`Username  : ${credentials.username || '(not set)'}\n`);
 voucherUploadOrchestrate({ credentials, folderPath }, mode)
   .then((results) => {
     const success = results.filter((r) => r.status.includes('Success')).length;
-    const failed = results.length - success;
+    const failed  = results.length - success;
 
     console.log('\n─────────────────────────────────────────');
-    console.log(`✅ Selesai! Total: ${results.length} | Berhasil: ${success} | Gagal: ${failed}`);
+    console.log(`✅ Done! Total: ${results.length} | Success: ${success} | Failed: ${failed}`);
     console.log('─────────────────────────────────────────');
 
     results.forEach((r, i) => {

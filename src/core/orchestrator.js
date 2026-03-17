@@ -8,13 +8,11 @@ const logger = require('../utils/logger');
 const MAX_RETRIES = 2;
 
 /**
- * Upload all Excel files from a folder using the given mode (CREATE or ACTIVATE)
- * @param {{ credentials: { username: string, password: string }, folderPath: string }} config
- * @param {'CREATE'|'ACTIVATE'} mode
+ * Upload all Excel files found in `folderPath` using the given mode (CREATE or ACTIVATE).
+ * Retries the entire session up to MAX_RETRIES times on unexpected failures.
  */
 async function voucherUploadOrchestrate(config, mode) {
   const { credentials, folderPath } = config;
-  // credentials shape: { username, password }
   const startTime = new Date();
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -38,7 +36,7 @@ async function voucherUploadOrchestrate(config, mode) {
 
       const results = [];
       for (let i = 0; i < excelFiles.length; i++) {
-        const file = excelFiles[i];
+        const file     = excelFiles[i];
         const filePath = path.join(folderPath, file);
         logger.info(`[${i + 1}/${excelFiles.length}] Processing: ${file}`);
         try {
