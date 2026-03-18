@@ -57,9 +57,6 @@ async function gotoVoucherMenu() {
 /**
  * Upload a voucher Excel file to ESB ERP.
  * Downloads and parses the error file if any rows fail.
- * @param {string} filePath - Absolute path to the Excel file
- * @param {'CREATE'|'ACTIVATE'} mode
- * @returns {string} Final upload queue row text
  */
 async function uploadVoucherExcelFile(filePath, mode) {
   if (!UPLOAD_MODES[mode]) throw new Error(`Invalid mode: ${mode}. Valid: CREATE, ACTIVATE`);
@@ -110,7 +107,6 @@ async function uploadVoucherExcelFile(filePath, mode) {
 
 /**
  * Check one or more voucher codes via table filter.
- * @returns {Array<{voucherCode: string, found: boolean, data?: object}>}
  */
 async function checkVoucherCodes(credentials, codes) {
   const isLoggedIn = await checkLoginStatus();
@@ -140,7 +136,6 @@ async function checkVoucherCodes(credentials, codes) {
 /**
  * Extend expiry date for one or more voucher codes.
  * extendVoucherExpiry returns { found, buttonAvailable, status, success } — no throw for business logic errors.
- * @returns {Array<{voucherCode: string, success: boolean, reason?: string, status?: string, message?: string}>}
  */
 async function extendVoucherCodes(credentials, codes, newEndDate) {
   const isLoggedIn = await checkLoginStatus();
@@ -181,7 +176,6 @@ async function extendVoucherCodes(credentials, codes, newEndDate) {
 /**
  * Delete one or more vouchers by code.
  * deleteVoucher returns { found, buttonAvailable, status, success } — no throw for business logic errors.
- * @returns {Array<{voucherCode: string, success: boolean, reason?: string, status?: string, message?: string}>}
  */
 async function deleteVoucherCodes(credentials, codes, deletionDate) {
   const isLoggedIn = await checkLoginStatus();

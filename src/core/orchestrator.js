@@ -17,10 +17,6 @@ const MAX_RETRIES = 2;
  * Upload all Excel files found in `folderPath` using the given mode (CREATE or ACTIVATE).
  * Per-file errors are recorded as ✗ Failed and do not trigger a retry.
  * Session-level errors trigger a retry up to MAX_RETRIES times.
- *
- * @param {{ credentials: object, folderPath: string }} config
- * @param {'CREATE'|'ACTIVATE'} mode
- * @returns {Promise<Array<{file: string, status: string, message: string}>>}
  */
 async function voucherUploadOrchestrate(config, mode) {
   const { credentials, folderPath } = config;

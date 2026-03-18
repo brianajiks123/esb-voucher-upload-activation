@@ -15,7 +15,6 @@ const { delay } = require('../utils/delay');
 
 /**
  * Poll for a DOM element until it appears or timeout is reached.
- * @throws {Error} if element not found within timeout
  */
 async function waitForElement(selector, timeout = 10000, interval = 1000) {
   let elapsed = 0;
@@ -86,7 +85,6 @@ async function getTextContent(selector) {
 
 /**
  * Poll upload queue row until status clears "process", then return final row text.
- * @throws {Error} if process not cleared within timeout
  */
 async function waitForUploadProcess(selector, content, interval = 500, timeout = 10000) {
   let elapsed = 0;
@@ -104,7 +102,6 @@ async function waitForUploadProcess(selector, content, interval = 500, timeout =
 /**
  * Download ESB error Excel after a failed upload.
  * Tries the table download button first; falls back to fallbackUrl if provided.
- * @returns {string|null} Path to downloaded file, or null if not available
  */
 async function downloadErrorFile(fallbackUrl = null) {
   const page = getPage();
@@ -146,7 +143,6 @@ async function waitForDownloadedFile(dir, timeout = 15000) {
 /**
  * Parse ESB error Excel file.
  * Header is on row 4; error column is the one after "Additional Information".
- * @returns {Array<{row, voucherCode, branchName, additionalInfo, errorMessages[]}>}
  */
 async function parseErrorExcel(filePath) {
   const workbook = new ExcelJS.Workbook();
@@ -196,7 +192,6 @@ async function parseErrorExcel(filePath) {
 
 /**
  * Search voucher by code via table filter input.
- * @returns {object|null} Row data object or null if not found
  */
 async function checkVoucherByCode(voucherCode) {
   const page = getPage();
@@ -233,9 +228,6 @@ async function checkVoucherByCode(voucherCode) {
 /**
  * Extend voucher expiry date.
  * Flow: search → verify exists → check checkbox → check btnUpdate → fill date → confirm
- *
- * Returns structured result instead of throwing for business logic errors:
- * @returns {{ found: boolean, buttonAvailable: boolean, status: string|null, success: boolean }}
  */
 async function extendVoucherExpiry(voucherCode, newEndDate) {
   const page = getPage();
@@ -299,9 +291,6 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
 /**
  * Delete a voucher.
  * Flow: search → verify exists → check checkbox → check btnDelete → fill modal (Purpose + Journal Date) → Process
- *
- * Returns structured result instead of throwing for business logic errors:
- * @returns {{ found: boolean, buttonAvailable: boolean, status: string|null, success: boolean }}
  */
 async function deleteVoucher(voucherCode, deletionDate) {
   const page = getPage();
