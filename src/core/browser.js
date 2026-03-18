@@ -1,3 +1,13 @@
+/**
+ * browser.js
+ * Manages the Puppeteer browser instance: launch, close, health check, tab management.
+ * Uses a persistent UserData directory to preserve login sessions across runs.
+ *
+ * SHOW_BROWSER env:
+ *   true  → headless: false (visible browser)
+ *   false → headless: 'shell' (hidden, faster)
+ */
+
 const puppeteer = require('puppeteer');
 const path = require('path');
 const logger = require('../utils/logger');
@@ -5,9 +15,7 @@ const logger = require('../utils/logger');
 let browser = null;
 let page = null;
 
-/**
- * Check if browser process is still alive and connected
- */
+/** Returns true if the browser process is still alive and connected */
 function isBrowserAlive() {
   try {
     return browser !== null && browser.process() !== null && browser.isConnected();
@@ -16,9 +24,7 @@ function isBrowserAlive() {
   }
 }
 
-/**
- * Clear browser history & cache via Chrome DevTools Protocol
- */
+/** Clear browser history & cache via Chrome DevTools Protocol */
 async function clearBrowserHistory() {
   try {
     const targets = browser.targets().filter((t) => t.type() === 'page');
@@ -26,10 +32,7 @@ async function clearBrowserHistory() {
       const client = await target.createCDPSession();
       await client.send('Network.clearBrowserCache');
       await client.send('Network.clearBrowserCookies');
-      await client.send('Storage.clearDataForOrigin', {
-        origin: '*',
-        storageTypes: 'all',
-      });
+      await client.send('Storage.clearDataForOrigin', { origin: '*', storageTypes: 'all' });
       await client.detach();
     }
     logger.info('Browser history & cache cleared');
@@ -39,34 +42,25 @@ async function clearBrowserHistory() {
 }
 
 /**
- * Close all active tabs except one (keep at least 1 to avoid unstable state)
+ * Close all active tabs except the last one.
+ * Keeping at least 1 tab alive avoids an unstable browser state.
  */
 async function closeAllTabs() {
   try {
     const pages = await browser.pages();
-    // Keep the last tab alive — closing ALL tabs can crash Chrome
     const tabsToClose = pages.slice(0, -1);
-    for (const p of tabsToClose) {
-      await p.close();
-    }
-    if (tabsToClose.length > 0) {
-      logger.info(`Closed ${tabsToClose.length} active tab(s), kept 1 alive`);
-    }
+    for (const p of tabsToClose) await p.close();
+    if (tabsToClose.length > 0) logger.info(`Closed ${tabsToClose.length} active tab(s), kept 1 alive`);
   } catch (err) {
     logger.warn(`Failed to close tabs: ${err.message}`);
   }
 }
 
-/**
- * Force kill browser and reset state
- */
+/** Force kill browser and reset state */
 async function forceCloseBrowser() {
   try {
-    if (browser) {
-      await browser.close();
-    }
+    if (browser) await browser.close();
   } catch (_) {
-    // Force kill the process if close() fails
     try {
       const proc = browser.process();
       if (proc) proc.kill('SIGKILL');
@@ -78,23 +72,23 @@ async function forceCloseBrowser() {
 }
 
 /**
- * Open browser & navigate to URL
- * - Validates browser health before reuse
- * - Restarts browser if dead/disconnected
- * - Clears history first, closes extra tabs
+ * Open browser and navigate to pageUrl.
+ * - Reuses existing browser if alive; restarts if dead/disconnected.
+ * - Clears history and closes extra tabs before navigating.
+ * - SHOW_BROWSER=true shows the browser window; false runs headless.
  */
 async function launch(pageUrl) {
   const userDataDir = path.resolve(__dirname, '../../UserData');
 
-  // If browser exists but is dead/disconnected, force close and restart
   if (browser && !isBrowserAlive()) {
     logger.warn('Browser tidak responsif, melakukan restart...');
     await forceCloseBrowser();
   }
 
   if (!browser) {
+    const headless = process.env.SHOW_BROWSER === 'true' ? false : 'shell';
     browser = await puppeteer.launch({
-      headless: false,
+      headless,
       userDataDir,
       args: ['--start-maximized'],
       defaultViewport: null,
@@ -102,11 +96,10 @@ async function launch(pageUrl) {
     logger.info('Browser launched');
   }
 
-  // Clear history & close extra tabs (keep 1 alive)
   await clearBrowserHistory();
   await closeAllTabs();
 
-  // Reuse the surviving tab instead of creating a new one
+  // Reuse the surviving tab instead of opening a new one
   const pages = await browser.pages();
   page = pages[pages.length - 1];
 
@@ -115,7 +108,7 @@ async function launch(pageUrl) {
 }
 
 /**
- * Close browser — clear history first, then force close
+ * Close browser — clear history first, then force close.
  */
 async function close() {
   if (browser) {
@@ -126,7 +119,8 @@ async function close() {
 }
 
 /**
- * Get active page instance
+ * Get the active page instance.
+ * Throws if launch() has not been called yet.
  */
 function getPage() {
   if (!page) throw new Error('Browser belum diinisialisasi. Panggil launch() terlebih dahulu.');

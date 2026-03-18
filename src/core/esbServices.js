@@ -1,29 +1,41 @@
+/**
+ * esbServices.js
+ * High-level ESB ERP actions: login, navigation, upload, check, extend, delete.
+ * Delegates DOM interactions to puppeteerActions.js.
+ */
+
 const { launch, close } = require('./browser');
-const { click, clickWithEvaluate, typeInto, uploadFile, elementExists, waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel, checkVoucherByCode } = require('./puppeteerActions');
+const {
+  click, clickWithEvaluate, typeInto, uploadFile, elementExists,
+  waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel,
+  checkVoucherByCode, extendVoucherExpiry, deleteVoucher,
+} = require('./puppeteerActions');
 const { delay } = require('../utils/delay');
 const logger = require('../utils/logger');
 
 const ESB_BASE_URL = process.env.ESB_BASE_URL || '';
 
+/** Upload mode config: codeMode, file input selector, submit button selector */
 const UPLOAD_MODES = {
   CREATE:   { codeMode: 1, uploadEl: '#fileUpload',      buttonUpload: '#btnSubmitUpload'   },
   ACTIVATE: { codeMode: 3, uploadEl: '#voucherActivate', buttonUpload: '#btnSubmitActivate' },
 };
 
 /**
- * Navigate to the login page and check whether the user is already authenticated.
+ * Navigate to /voucher and check if already logged in (logout link present).
  */
 async function checkLoginStatus() {
   logger.info('Checking login status...');
-  await launch(`${ESB_BASE_URL}/site/login`);
+  await launch(`${ESB_BASE_URL}/voucher`);
   return elementExists("a[href='/site/logout']");
 }
 
 /**
- * Fill in the login form and submit. Dismisses any SweetAlert2 error dialog if present.
+ * Fill login form and submit.
+ * Dismisses SweetAlert2 error dialog if login fails.
  */
 async function loginAction({ username, password }) {
-  logger.info('Logging in to ESB...');
+  logger.info('Logging in...');
   await typeInto('#loginform-username', username);
   await typeInto('#loginform-password', password);
   await click('#btnLogin');
@@ -35,25 +47,25 @@ async function loginAction({ username, password }) {
   }
 }
 
-/**
- * Navigate to the voucher master page via the sidebar menu.
- */
+/** Navigate to /voucher via sidebar menu (Master → Voucher) */
 async function gotoVoucherMenu() {
-  logger.info('Navigating to voucher menu...');
+  logger.info('Navigating to /voucher...');
   await click("a[href='/master/index']");
   await click("a[href='/voucher']");
 }
 
 /**
- * Upload a voucher Excel file using the given mode (CREATE or ACTIVATE).
- * If the upload result contains failed rows, downloads the error Excel file,
- * parses per-row error messages, and throws a detailed error.
+ * Upload a voucher Excel file to ESB ERP.
+ * Downloads and parses the error file if any rows fail.
+ * @param {string} filePath - Absolute path to the Excel file
+ * @param {'CREATE'|'ACTIVATE'} mode
+ * @returns {string} Final upload queue row text
  */
 async function uploadVoucherExcelFile(filePath, mode) {
-  if (!UPLOAD_MODES[mode]) throw new Error(`Invalid mode: ${mode}. Valid modes: CREATE, ACTIVATE`);
+  if (!UPLOAD_MODES[mode]) throw new Error(`Invalid mode: ${mode}. Valid: CREATE, ACTIVATE`);
   const { codeMode, uploadEl, buttonUpload } = UPLOAD_MODES[mode];
 
-  logger.info(`Uploading voucher file: ${filePath} (mode: ${mode})`);
+  logger.info(`Uploading [${mode}]: ${filePath}`);
   await delay(1000);
   await click('button.btnUpload');
   await delay(1000);
@@ -63,33 +75,23 @@ async function uploadVoucherExcelFile(filePath, mode) {
   await delay(1000);
   await clickWithEvaluate(buttonUpload);
 
-  const resultUpload = await waitForUploadProcess(
-    '#data-table-upload-queue > tbody > tr',
-    'process',
-    2000
-  );
-
-  // Check whether any rows failed
-  const hasFailed = resultUpload.toLowerCase().includes('failed') ||
-                    resultUpload.toLowerCase().includes('error');
+  const resultUpload = await waitForUploadProcess('#data-table-upload-queue > tbody > tr', 'process', 2000);
+  const hasFailed = resultUpload.toLowerCase().includes('failed') || resultUpload.toLowerCase().includes('error');
 
   let errorDetails = [];
   if (hasFailed) {
-    logger.warn('Upload contains failed rows — attempting to download error file...');
+    logger.warn('Upload has failed rows — downloading error file...');
     try {
       const errorFilePath = await downloadErrorFile();
       if (errorFilePath) {
         errorDetails = await parseErrorExcel(errorFilePath);
-        if (errorDetails.length > 0) {
-          logger.warn(`Found ${errorDetails.length} error row(s):`);
-          errorDetails.forEach((e) => {
-            logger.warn(`  Row ${e.row} | ${e.voucherCode} | ${e.branchName}`);
-            e.errorMessages.forEach((msg, i) => logger.warn(`    ${i + 1}. ${msg}`));
-          });
-        }
+        errorDetails.forEach((e) => {
+          logger.warn(`Row ${e.row} | ${e.voucherCode} | ${e.branchName}`);
+          e.errorMessages.forEach((msg, i) => logger.warn(`  ${i + 1}. ${msg}`));
+        });
       }
     } catch (dlErr) {
-      logger.error(`Failed to download/read error file: ${dlErr.message}`);
+      logger.error(`Error file download failed: ${dlErr.message}`);
     }
   }
 
@@ -100,42 +102,124 @@ async function uploadVoucherExcelFile(filePath, mode) {
       const errList = e.errorMessages.map((msg, i) => `  ${i + 1}. ${msg}`).join('\n');
       return `Row ${e.row} [${e.voucherCode}]:\n${errList}`;
     }).join('\n\n');
-    throw new Error(`Upload completed with errors:\n${summary}`);
+    throw new Error(`Upload errors:\n${summary}`);
   }
 
   return resultUpload;
 }
 
 /**
- * Check one or more voucher codes against the ESB voucher table.
- * Uses the filter input in the table header to search each code individually.
- * Clears browser storage and closes the browser when done.
+ * Check one or more voucher codes via table filter.
+ * @returns {Array<{voucherCode: string, found: boolean, data?: object}>}
  */
 async function checkVoucherCodes(credentials, codes) {
   const isLoggedIn = await checkLoginStatus();
-  if (!isLoggedIn) await loginAction(credentials);
-
-  await gotoVoucherMenu();
+  if (!isLoggedIn) {
+    await loginAction(credentials);
+    await gotoVoucherMenu();
+  }
   await delay(1500);
 
   const results = [];
   for (const code of codes) {
     const trimmed = code.trim();
     if (!trimmed) continue;
-    logger.info(`Checking voucher: ${trimmed}`);
+    logger.info(`Check voucher: ${trimmed}`);
     const data = await checkVoucherByCode(trimmed);
     results.push(data ? { voucherCode: trimmed, found: true, data } : { voucherCode: trimmed, found: false });
   }
 
-  // Clear browser storage then close the browser session
   try {
     const { getPage } = require('./browser');
-    const page = getPage();
-    await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+    await getPage().evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
   } catch (_) {}
   await close();
-
   return results;
 }
 
-module.exports = { checkLoginStatus, loginAction, gotoVoucherMenu, uploadVoucherExcelFile, checkVoucherCodes };
+/**
+ * Extend expiry date for one or more voucher codes.
+ * extendVoucherExpiry returns { found, buttonAvailable, status, success } — no throw for business logic errors.
+ * @returns {Array<{voucherCode: string, success: boolean, reason?: string, status?: string, message?: string}>}
+ */
+async function extendVoucherCodes(credentials, codes, newEndDate) {
+  const isLoggedIn = await checkLoginStatus();
+  if (!isLoggedIn) {
+    await loginAction(credentials);
+    await gotoVoucherMenu();
+  }
+  await delay(1500);
+
+  const results = [];
+  for (const code of codes) {
+    const trimmed = code.trim();
+    if (!trimmed) continue;
+    logger.info(`Extend voucher: ${trimmed} → ${newEndDate}`);
+    try {
+      const r = await extendVoucherExpiry(trimmed, newEndDate);
+      if (!r.found) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
+      } else if (!r.buttonAvailable) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'button_unavailable', status: r.status });
+      } else {
+        results.push({ voucherCode: trimmed, success: true, message: `Diperpanjang hingga ${newEndDate}` });
+      }
+    } catch (err) {
+      logger.error(`Extend ${trimmed} failed: ${err.message}`);
+      results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+    }
+  }
+
+  try {
+    const { getPage } = require('./browser');
+    await getPage().evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+  } catch (_) {}
+  await close();
+  return results;
+}
+
+/**
+ * Delete one or more vouchers by code.
+ * deleteVoucher returns { found, buttonAvailable, status, success } — no throw for business logic errors.
+ * @returns {Array<{voucherCode: string, success: boolean, reason?: string, status?: string, message?: string}>}
+ */
+async function deleteVoucherCodes(credentials, codes, deletionDate) {
+  const isLoggedIn = await checkLoginStatus();
+  if (!isLoggedIn) {
+    await loginAction(credentials);
+    await gotoVoucherMenu();
+  }
+  await delay(1500);
+
+  const results = [];
+  for (const code of codes) {
+    const trimmed = code.trim();
+    if (!trimmed) continue;
+    logger.info(`Delete voucher: ${trimmed} | date: ${deletionDate}`);
+    try {
+      const r = await deleteVoucher(trimmed, deletionDate);
+      if (!r.found) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
+      } else if (!r.buttonAvailable) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'button_unavailable', status: r.status });
+      } else {
+        results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
+      }
+    } catch (err) {
+      logger.error(`Delete ${trimmed} failed: ${err.message}`);
+      results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+    }
+  }
+
+  try {
+    const { getPage } = require('./browser');
+    await getPage().evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+  } catch (_) {}
+  await close();
+  return results;
+}
+
+module.exports = {
+  checkLoginStatus, loginAction, gotoVoucherMenu,
+  uploadVoucherExcelFile, checkVoucherCodes, extendVoucherCodes, deleteVoucherCodes,
+};

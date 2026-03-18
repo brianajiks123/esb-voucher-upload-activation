@@ -2,114 +2,124 @@
 
 ## Overview
 
-The tool running as CLI and support 2 mode upload voucher to ESB ERP:
+CLI tool and library for uploading vouchers to ESB ERP. Supports 2 modes:
 
-| Mode     | Fungsi                        | Folder Sumber      | ESB codeMode |
+| Mode     | Function                      | Source Folder      | ESB codeMode |
 |----------|-------------------------------|--------------------|--------------|
-| CREATE   | Menambahkan voucher baru      | `files/create/`    | 1            |
-| ACTIVATE | Mengaktifkan voucher existing | `files/activate/`  | 3            |
+| CREATE   | Add new vouchers              | `files/create/`    | 1            |
+| ACTIVATE | Activate existing vouchers    | `files/activate/`  | 3            |
 
 ---
 
-## CREATE Flow
+## CREATE / ACTIVATE Flow
 
 ```
-node index.js create
+node index.js create (or activate)
         │
         ▼
-Read all .xlsx / .xls from files/create/
+Read all .xlsx / .xls from files/<mode>/
         │
         ▼
-Open browser Puppeteer → navigate to ESB login page
-        │
-        ▼
-Login status check (search elemen logout link)
+checkLoginStatus() → launch browser → navigate to /voucher
         │
    ┌────┴────┐
-Logged  Not Logged
-        │         │
-        │    Fill username & password → click Login → confirm alert
+Logged in   Not logged in
+                  │
+            loginAction() → fill form → submit → dismiss alert if any
         │
         ▼
-Navigate to Master → Voucher
+gotoVoucherMenu() → Master → Voucher
         │
         ▼
 For each file:
-  1. Click button "Upload"
-  2. Click tab mode CREATE (codeMode=1)
-  3. Set file to input #fileUpload
-  4. Click #btnSubmitUpload
-  5. Waiting process upload finish (polling tabel queue)
-  6. Close modal upload queue
-  7. Save result (Success / Failed)
+  1. Click "Upload" button
+  2. Click tab for mode (codeMode 1 or 3)
+  3. Set file to upload input
+  4. Click submit button
+  5. Poll upload queue until status clears "process"
+  6. If failed rows → download & parse error Excel
+  7. Close upload queue modal
+  8. Save result (✓ Success / ✗ Failed)
         │
         ▼
-Close browser → Show summary result in console
+close() → print summary
 ```
 
 ---
 
-## ACTIVATE Flow
+## EXTEND Flow
 
 ```
-node index.js activate
+extendVoucherCodes(credentials, codes, newEndDate)
         │
         ▼
-Read all .xlsx / .xls from files/activate/
+Login check → navigate to /voucher
         │
         ▼
-Open browser Puppeteer → navigate to ESB login page
+For each code:
+  1. Filter table by voucher code
+  2. Check row checkbox
+  3. Look for btnUpdate (a#btnUpdate[href="/voucher/update-voucher-length"])
+     ├─ NOT found → return { found: true, buttonAvailable: false, status }
+     └─ Found → click btnUpdate → fill new end date → click btnUpdateModal
+                → waitForNavigation → waitForElement (table ready)
+                → return { success: true }
         │
         ▼
-Login status check
-        │
-   ┌────┴────┐
-Logged  Not Logged
-        │         │
-        │    Fill username & password → click Login → confirm alert
-        │
-        ▼
-Navigate to Master → Voucher
-        │
-        ▼
-For each file:
-  1. Click button "Upload"
-  2. Click tab mode ACTIVATE (codeMode=3)
-  3. Set file to input #voucherActivate
-  4. Click #btnSubmitActivate
-  5. Waiting process upload finish (polling tabel queue)
-  6. Close modal upload queue
-  7. Save result (Success / Failed)
+Return results[]
+```
+
+---
+
+## DELETE Flow
+
+```
+deleteVoucherCodes(credentials, codes, deletionDate)
         │
         ▼
-Close browser → Show summary result in console
+Login check → navigate to /voucher
+        │
+        ▼
+For each code:
+  1. Filter table by voucher code
+  2. Check row checkbox
+  3. Look for btnDelete (a#btnDelete)
+     ├─ NOT found → return { found: true, buttonAvailable: false, status }
+     └─ Found → click btnDelete → modal #myModalActivate opens
+                → fill Purpose (Select2, type "voucher" → Enter)
+                → fill Journal Date (DD-MM-YYYY)
+                → click Process button (native mouse click)
+                → waitForNavigation → waitForElement (table ready)
+                → return { success: true }
+        │
+        ▼
+Return results[]
 ```
 
 ---
 
 ## Retry Mechanism
 
-If has error in level orchestrator (not per-file), process will be automatic retried until **2x** with delay 5 second per attempt.
+Session-level errors (not per-file) trigger automatic retry up to **2x** with a delay of `attempt × 5s`.
 
-Error per-file not trigger retry — file failed saved called `✗ Failed` and process continue to next file.
+Per-file errors are recorded as `✗ Failed` and the process continues to the next file.
 
 ---
 
-## Output Console
+## Console Output (CLI)
 
 ```
 ╔══════════════════════════════════════════╗
 ║    VOUCHER UPLOAD ACTIVATION - ESB ERP   ║
 ╚══════════════════════════════════════════╝
 
-Mode      : ACTIVATE
-Folder    : D:\...\files\activate
-Username  : burjo_user
+Mode      : CREATE
+Folder    : D:\...\files\create
+Username  : esb_user
 
 ─────────────────────────────────────────
-✅ Selesai! Total: 3 | Berhasil: 3 | Gagal: 0
+✅ Done! Total: 2 | Success: 2 | Failed: 0
 ─────────────────────────────────────────
   1. ✓ voucher_batch_1.xlsx
   2. ✓ voucher_batch_2.xlsx
-  3. ✓ voucher_batch_3.xlsx
 ```

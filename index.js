@@ -1,5 +1,5 @@
 /**
- * CLI entry point for voucher upload (CREATE / ACTIVATE)
+ * index.js — CLI entry point for voucher upload (CREATE / ACTIVATE)
  *
  * Usage:
  *   node index.js create
@@ -16,7 +16,6 @@ const { credentials } = require('./src/config/credentials');
 const { voucherUploadOrchestrate } = require('./src/core/orchestrator');
 
 const VALID_MODES = ['create', 'activate'];
-
 const command = process.argv[2]?.toLowerCase();
 
 if (!command || !VALID_MODES.includes(command)) {

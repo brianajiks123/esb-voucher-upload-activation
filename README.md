@@ -1,8 +1,10 @@
 # ESB Voucher Upload Activation
 
-CLI tool to upload file Excel voucher to ESB ERP. Support 2 mode:
-- **CREATE** — add new voucher
-- **ACTIVATE** — activate exist voucher
+CLI tool to upload voucher Excel files to ESB ERP. Supports 2 modes:
+- **CREATE** — add new vouchers
+- **ACTIVATE** — activate existing vouchers
+
+Also used as a library by `bot-voucher-esb` for extend and delete operations.
 
 ## Requirements
 
@@ -17,8 +19,6 @@ npm install
 
 ## Configuration
 
-Copy `.env.example` to `.env` then fill the value:
-
 ```bash
 cp .env.example .env
 ```
@@ -27,27 +27,27 @@ cp .env.example .env
 ESB_BASE_URL=erp_base_url
 ESB_USERNAME=your_esb_username
 ESB_PASSWORD=your_esb_password
+SHOW_BROWSER=false
 LOG_LEVEL=debug
 NODE_ENV=development
 ```
 
-## Prepare File
+`SHOW_BROWSER=true` shows the browser window during automation. `false` runs headless (default).
 
-Place file `.xlsx` / `.xls` to relevant folder:
+## Prepare Files
+
+Place `.xlsx` / `.xls` files in the relevant folder:
 
 ```
 files/
-├── create/       ← file to mode CREATE
-└── activate/     ← file to mode ACTIVATE
+├── create/       ← files for CREATE mode
+└── activate/     ← files for ACTIVATE mode
 ```
 
 ## Usage
 
 ```bash
-# Add new voucher
 node index.js create
-
-# Activate voucher
 node index.js activate
 ```
 
@@ -58,13 +58,16 @@ npm run create
 npm run activate
 ```
 
+> `extendVoucherCodes` and `deleteVoucherCodes` are not exposed as CLI commands — they are called directly by `bot-voucher-esb` at runtime.
+
 ## Logs
 
-Log automatic saved in folder `logs/`:
-- `logs/combined.log` — all log
-- `logs/error.log` — log error only
+```
+logs/combined.log   — all logs
+logs/error.log      — error logs only
+```
 
-## Dokumentasi
+## Documentation
 
-- [`docs/FLOW.md`](docs/FLOW.md) — process flow each mode
+- [`docs/FLOW.md`](docs/FLOW.md) — process flow
 - [`docs/STRUCTURE.md`](docs/STRUCTURE.md) — project structure
