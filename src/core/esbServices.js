@@ -76,10 +76,11 @@ async function uploadVoucherExcelFile(filePath, mode) {
   const hasFailed = resultUpload.toLowerCase().includes('failed') || resultUpload.toLowerCase().includes('error');
 
   let errorDetails = [];
+  let errorFilePath = null;
   if (hasFailed) {
     logger.warn('Upload has failed rows — downloading error file...');
     try {
-      const errorFilePath = await downloadErrorFile();
+      errorFilePath = await downloadErrorFile();
       if (errorFilePath) {
         errorDetails = await parseErrorExcel(errorFilePath);
         errorDetails.forEach((e) => {
@@ -99,7 +100,9 @@ async function uploadVoucherExcelFile(filePath, mode) {
       const errList = e.errorMessages.map((msg, i) => `  ${i + 1}. ${msg}`).join('\n');
       return `Row ${e.row} [${e.voucherCode}]:\n${errList}`;
     }).join('\n\n');
-    throw new Error(`Upload errors:\n${summary}`);
+    const err = new Error(`Upload errors:\n${summary}`);
+    err.errorFilePath = errorFilePath;
+    throw err;
   }
 
   return resultUpload;

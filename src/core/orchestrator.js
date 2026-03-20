@@ -51,7 +51,7 @@ async function voucherUploadOrchestrate(config, mode) {
           results.push({ file, status: '✓ Success', message: result || '' });
         } catch (err) {
           logger.error(`Failed to upload ${file}: ${err.message}`);
-          results.push({ file, status: '✗ Failed', message: err.message });
+          results.push({ file, status: '✗ Failed', message: err.message, errorFilePath: err.errorFilePath || null });
         }
       }
 
