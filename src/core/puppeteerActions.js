@@ -142,7 +142,8 @@ async function waitForDownloadedFile(dir, timeout = 15000) {
 
 /**
  * Parse ESB error Excel file.
- * Header is on row 4; error column is the one after "Additional Information".
+ * Finds the header row by locating "Voucher Code" column.
+ * Error message is always in the last cell of each data row (column K — no header).
  */
 async function parseErrorExcel(filePath) {
   const workbook = new ExcelJS.Workbook();
@@ -165,23 +166,29 @@ async function parseErrorExcel(filePath) {
     return [];
   }
 
+  logger.debug(`Error Excel headers: ${JSON.stringify(headers)}`);
+
   const colVoucherCode = headers.findIndex((h) => h.includes('voucher code'));
-  const colBranch      = headers.findIndex((h) => h.includes('branch'));
-  const colAdditional  = headers.findIndex((h) => h.includes('additional'));
-  const colErrorMsg    = colAdditional + 1;
+  const colBranch      = headers.findIndex((h) => h.includes('branch name') || (h.includes('branch') && !h.includes('can')));
 
   const errors = [];
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber <= headerRowIdx) return;
     const vals = row.values.slice(1);
-    const errorMessage = String(vals[colErrorMsg] ?? '').trim();
+
+    // Error message is always the last non-empty cell in the row
+    let errorMessage = '';
+    for (let i = vals.length - 1; i >= 0; i--) {
+      const v = String(vals[i] ?? '').trim();
+      if (v) { errorMessage = v; break; }
+    }
+
     if (!errorMessage) return;
     errors.push({
       row: rowNumber,
-      voucherCode:    String(vals[colVoucherCode] ?? '').trim(),
-      branchName:     String(vals[colBranch]      ?? '').trim(),
-      additionalInfo: String(vals[colAdditional]  ?? '').trim(),
-      errorMessages:  errorMessage.split(/,\s*/).map((e) => e.trim()).filter(Boolean),
+      voucherCode:   String(vals[colVoucherCode] ?? '').trim(),
+      branchName:    String(vals[colBranch]      ?? '').trim(),
+      errorMessages: errorMessage.split(/[,;]\s*/).map((e) => e.trim()).filter(Boolean),
     });
   });
 

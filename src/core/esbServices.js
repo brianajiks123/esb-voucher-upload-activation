@@ -32,7 +32,8 @@ async function checkLoginStatus() {
 
 /**
  * Fill login form and submit.
- * Throws an error with the alert message if login fails (SweetAlert2 dialog appears).
+ * - Confirmation dialog ("Are you sure"): confirm and wait for navigation.
+ * - Error dialog (invalid credentials): throw with isLoginError = true.
  */
 async function loginAction({ username, password }) {
   logger.info('Logging in...');
@@ -42,15 +43,26 @@ async function loginAction({ username, password }) {
   await delay(2000);
   const hasAlert = await elementExists('.swal2-confirm.swal2-styled');
   if (hasAlert) {
-    let alertText = 'Login gagal: username atau password salah.';
+    let alertText = '';
     try {
       const text = await getTextContent('.swal2-html-container');
       if (text && text.trim()) alertText = text.trim();
     } catch (_) {}
-    await click('.swal2-confirm.swal2-styled');
-    const err = new Error(alertText);
-    err.isLoginError = true;
-    throw err;
+
+    // Confirmation dialog — click OK and wait for navigation
+    const isConfirmation = /sure|continue|lanjut|konfirmasi/i.test(alertText);
+    if (isConfirmation) {
+      logger.info(`Login confirmation dialog: "${alertText}" — confirming...`);
+      await click('.swal2-confirm.swal2-styled');
+      await waitForNavigation();
+    } else {
+      // Error dialog — throw immediately
+      const message = alertText || 'Login gagal: username atau password salah.';
+      await click('.swal2-confirm.swal2-styled');
+      const err = new Error(message);
+      err.isLoginError = true;
+      throw err;
+    }
   }
   // Verify login succeeded by checking logout link presence
   const isLoggedIn = await elementExists("a[href='/site/logout']");
