@@ -6,7 +6,7 @@
 
 const { launch, close } = require('./browser');
 const {
-  click, clickWithEvaluate, typeInto, uploadFile, elementExists,
+  click, clickWithEvaluate, typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel,
   checkVoucherByCode, extendVoucherExpiry, deleteVoucher,
 } = require('./puppeteerActions');
@@ -32,7 +32,7 @@ async function checkLoginStatus() {
 
 /**
  * Fill login form and submit.
- * Dismisses SweetAlert2 error dialog if login fails.
+ * Throws an error with the alert message if login fails (SweetAlert2 dialog appears).
  */
 async function loginAction({ username, password }) {
   logger.info('Logging in...');
@@ -42,9 +42,24 @@ async function loginAction({ username, password }) {
   await delay(2000);
   const hasAlert = await elementExists('.swal2-confirm.swal2-styled');
   if (hasAlert) {
+    let alertText = 'Login gagal: username atau password salah.';
+    try {
+      const text = await getTextContent('.swal2-html-container');
+      if (text && text.trim()) alertText = text.trim();
+    } catch (_) {}
     await click('.swal2-confirm.swal2-styled');
-    await waitForNavigation();
+    const err = new Error(alertText);
+    err.isLoginError = true;
+    throw err;
   }
+  // Verify login succeeded by checking logout link presence
+  const isLoggedIn = await elementExists("a[href='/site/logout']");
+  if (!isLoggedIn) {
+    const err = new Error('Login gagal: tidak dapat masuk ke halaman voucher. Periksa kredensial ESB.');
+    err.isLoginError = true;
+    throw err;
+  }
+  logger.info('Login successful.');
 }
 
 /** Navigate to /voucher via sidebar menu (Master → Voucher) */

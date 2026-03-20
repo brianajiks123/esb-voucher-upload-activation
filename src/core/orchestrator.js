@@ -64,6 +64,12 @@ async function voucherUploadOrchestrate(config, mode) {
       logger.error(`[ATTEMPT ${attempt}/${MAX_RETRIES}] Error: ${err.message}`);
       try { await close(); } catch (_) {}
 
+      // Login errors are permanent — no point retrying
+      if (err.isLoginError) {
+        logger.warn('Login error detected — skipping retry.');
+        throw err;
+      }
+
       if (attempt < MAX_RETRIES) {
         const wait = attempt * 5000;
         logger.info(`Waiting ${wait}ms before retry...`);
