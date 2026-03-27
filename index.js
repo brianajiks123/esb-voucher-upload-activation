@@ -1,6 +1,4 @@
 /**
- * index.js — CLI entry point for voucher upload (CREATE / ACTIVATE)
- *
  * Usage:
  *   node index.js create
  *   node index.js activate

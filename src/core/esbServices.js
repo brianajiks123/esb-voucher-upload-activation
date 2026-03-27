@@ -1,14 +1,8 @@
-/**
- * esbServices.js
- * High-level ESB ERP actions: login, navigation, upload, check, extend, delete.
- * Delegates DOM interactions to puppeteerActions.js.
- */
-
 const { launch, close } = require('./browser');
 const {
   click, clickWithEvaluate, typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel,
-  checkVoucherByCode, extendVoucherExpiry, deleteVoucher,
+  checkVoucherByCode, extendVoucherExpiry, deleteVoucher, activateVoucherByCode,
 } = require('./puppeteerActions');
 const { delay } = require('../utils/delay');
 const logger = require('../utils/logger');
@@ -243,7 +237,63 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
   return results;
 }
 
+/**
+ * Activate one or more vouchers by code.
+ * Flow per code: check status → if 'available' activate directly, else report status to caller.
+ * Returns array of { voucherCode, success, reason, status, message }
+ */
+async function activateVoucherByCodes(credentials, codes) {
+  const isLoggedIn = await checkLoginStatus();
+  if (!isLoggedIn) {
+    await loginAction(credentials);
+    await gotoVoucherMenu();
+  }
+  await delay(1500);
+
+  const results = [];
+  for (const code of codes) {
+    const trimmed = code.trim();
+    if (!trimmed) continue;
+    logger.info(`Activate voucher by code: ${trimmed}`);
+    try {
+      // First check the voucher status
+      const data = await checkVoucherByCode(trimmed);
+      if (!data) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
+        continue;
+      }
+
+      const status = (data.status || '').toLowerCase().trim();
+      if (status !== 'available') {
+        // Not available — report status, skip activation
+        results.push({ voucherCode: trimmed, success: false, reason: 'not_available', status: data.status });
+        continue;
+      }
+
+      // Status is available — proceed with activation
+      const r = await activateVoucherByCode(trimmed);
+      if (!r.found) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
+      } else if (!r.buttonAvailable) {
+        results.push({ voucherCode: trimmed, success: false, reason: 'button_unavailable', status: r.status });
+      } else {
+        results.push({ voucherCode: trimmed, success: true, message: 'Berhasil diaktivasi' });
+      }
+    } catch (err) {
+      logger.error(`Activate ${trimmed} failed: ${err.message}`);
+      results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+    }
+  }
+
+  try {
+    const { getPage } = require('./browser');
+    await getPage().evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+  } catch (_) {}
+  await close();
+  return results;
+}
+
 module.exports = {
   checkLoginStatus, loginAction, gotoVoucherMenu,
-  uploadVoucherExcelFile, checkVoucherCodes, extendVoucherCodes, deleteVoucherCodes,
+  uploadVoucherExcelFile, checkVoucherCodes, extendVoucherCodes, deleteVoucherCodes, activateVoucherByCodes,
 };

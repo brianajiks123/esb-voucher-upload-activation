@@ -1,13 +1,3 @@
-/**
- * browser.js
- * Manages the Puppeteer browser instance: launch, close, health check, tab management.
- * Uses a persistent UserData directory to preserve login sessions across runs.
- *
- * SHOW_BROWSER env:
- *   true  → headless: false (visible browser)
- *   false → headless: 'shell' (hidden, faster)
- */
-
 const puppeteer = require('puppeteer');
 const path = require('path');
 const logger = require('../utils/logger');

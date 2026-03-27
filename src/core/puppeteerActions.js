@@ -1,8 +1,3 @@
-/**
- * puppeteerActions.js
- * Low-level DOM helper actions for Puppeteer: click, type, upload, wait, voucher operations.
- */
-
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -419,9 +414,106 @@ async function deleteVoucher(voucherCode, deletionDate) {
   return { found: true, buttonAvailable: true, status: rowData.status, success: true };
 }
 
+// ─── Voucher Activate by Code ─────────────────────────────────────────────────
+
+/**
+ * Activate a single voucher by code via the ESB ERP table.
+ * Flow: search → verify exists & status === 'available' → check checkbox → click Activate → confirm modal
+ * Returns { found, status, buttonAvailable, success }
+ */
+async function activateVoucherByCode(voucherCode) {
+  const page = getPage();
+  const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
+
+  await waitForElement(filterInput);
+  await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, filterInput);
+  await page.type(filterInput, voucherCode);
+  await page.keyboard.press('Enter');
+  await delay(1500);
+
+  // Step 1: verify voucher exists and get status
+  const rowData = await page.evaluate((code) => {
+    const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
+    if (!row) return null;
+    return { status: row.querySelector('td[data-col-seq="11"]')?.innerText?.trim() || 'unknown' };
+  }, voucherCode);
+
+  if (!rowData) return { found: false, buttonAvailable: false, status: null, success: false };
+
+  // Step 2: check the row checkbox
+  await page.evaluate((code) => {
+    const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
+    const cb = row?.querySelector('td[data-col-seq="12"] input[type="checkbox"].kv-row-checkbox');
+    if (cb && !cb.checked) cb.click();
+  }, voucherCode);
+  await delay(500);
+
+  // Step 3: check if Activate button is available
+  const btnActivateExists = await elementExists('a#btnActivate');
+  if (!btnActivateExists) {
+    return { found: true, buttonAvailable: false, status: rowData.status, success: false };
+  }
+
+  // Step 4: click Activate button
+  await clickWithEvaluate('a#btnActivate');
+  await waitForElement('#myModalActivate', 10000);
+  await delay(1000);
+
+  // Step 5: fill Journal Date in modal (same modal as delete)
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, '0');
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const yyyy = today.getFullYear();
+  const todayStr = `${dd}-${mm}-${yyyy}`;
+
+  const dateInput = '#myModalActivate #msvoucher-voucherstartdateactivate-disp';
+  const dateExists = await elementExists(dateInput);
+  if (dateExists) {
+    await page.evaluate((sel, val) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      el.value = val;
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur',   { bubbles: true }));
+    }, dateInput, todayStr);
+    await delay(500);
+  }
+
+  // Step 6: click Process/Confirm button
+  const btnProcess = '#myModalActivate .panel-footer .pull-right a#btnSaveModal';
+  const btnExists = await elementExists(btnProcess);
+  if (btnExists) {
+    const btnCoords = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }, btnProcess);
+    if (btnCoords) {
+      await page.mouse.click(btnCoords.x, btnCoords.y);
+    } else {
+      await clickWithEvaluate(btnProcess);
+    }
+  } else {
+    // Fallback: try confirm button directly
+    const btnConfirm = '#myModalActivate a.btn-primary, #myModalActivate button.btn-primary';
+    await waitForElement(btnConfirm, 5000);
+    await clickWithEvaluate(btnConfirm);
+  }
+
+  // Wait for page reload after activation
+  await waitForNavigation().catch(() => {});
+  await waitForElement(filterInput, 15000);
+  await delay(500);
+
+  logger.info(`Voucher ${voucherCode} activated`);
+  return { found: true, buttonAvailable: true, status: rowData.status, success: true };
+}
+
 module.exports = {
   waitForElement, waitForNavigation, click, clickWithEvaluate,
   typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, downloadErrorFile, parseErrorExcel,
-  checkVoucherByCode, extendVoucherExpiry, deleteVoucher,
+  checkVoucherByCode, extendVoucherExpiry, deleteVoucher, activateVoucherByCode,
 };

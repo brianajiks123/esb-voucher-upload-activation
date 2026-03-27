@@ -1,9 +1,3 @@
-/**
- * orchestrator.js
- * Main upload flow: read Excel files from folder → login → upload one by one → return results.
- * Retries the entire session up to MAX_RETRIES times on unexpected failures.
- */
-
 const fs = require('fs').promises;
 const path = require('path');
 const { close } = require('./browser');
