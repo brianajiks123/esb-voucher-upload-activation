@@ -1,10 +1,16 @@
 # ESB Voucher Upload Activation
 
-CLI tool to upload voucher Excel files to ESB ERP. Supports 2 modes:
-- **CREATE** — add new vouchers
-- **ACTIVATE** — activate existing vouchers
+CLI tool and library for managing vouchers on ESB ERP via Puppeteer browser automation.
 
-Also used as a library by `bot-voucher-esb` for extend and delete operations.
+Supports the following operations:
+- **CREATE** — upload new vouchers via Excel file
+- **ACTIVATE (file)** — activate vouchers via Excel file
+- **ACTIVATE (code)** — activate individual vouchers by code with Purpose + Date
+- **CHECK** — check voucher status and info by code
+- **EXTEND** — extend voucher expiry date
+- **DELETE** — delete vouchers
+
+> Used as a library by `bot-voucher-esb`. The CREATE and ACTIVATE (file) modes are also available as CLI commands.
 
 ## Requirements
 
@@ -25,8 +31,10 @@ cp .env.example .env
 
 ```env
 ESB_BASE_URL=erp_base_url
-ESB_USERNAME=your_esb_username
-ESB_PASSWORD=your_esb_password
+IMVB_USERNAME=your_imvb_username
+IMVB_PASSWORD=your_imvb_password
+BURGAS_USERNAME=your_burgas_username
+BURGAS_PASSWORD=your_burgas_password
 SHOW_BROWSER=false
 LOG_LEVEL=debug
 NODE_ENV=development
@@ -34,7 +42,7 @@ NODE_ENV=development
 
 `SHOW_BROWSER=true` shows the browser window during automation. `false` runs headless (default).
 
-## Prepare Files
+## CLI Usage
 
 Place `.xlsx` / `.xls` files in the relevant folder:
 
@@ -44,7 +52,7 @@ files/
 └── activate/     ← files for ACTIVATE mode
 ```
 
-## Usage
+Then run:
 
 ```bash
 node index.js create
@@ -58,7 +66,23 @@ npm run create
 npm run activate
 ```
 
-> `extendVoucherCodes` and `deleteVoucherCodes` are not exposed as CLI commands — they are called directly by `bot-voucher-esb` at runtime.
+## Library Usage
+
+When used as a library by `bot-voucher-esb`, the following functions are available from `src/core/esbServices.js`:
+
+| Function | Description |
+|---|---|
+| `checkVoucherCodes(credentials, codes)` | Check status and info for one or more voucher codes |
+| `extendVoucherCodes(credentials, codes, newEndDate)` | Extend expiry date for one or more vouchers |
+| `deleteVoucherCodes(credentials, codes, deletionDate)` | Delete one or more vouchers |
+| `activateVoucherByCodes(credentials, codes, purpose, activationDate)` | Activate vouchers by code with Purpose + Date |
+| `uploadVoucherExcelFile(filePath, mode)` | Upload a single Excel file (used by orchestrator) |
+
+And from `src/core/orchestrator.js`:
+
+| Function | Description |
+|---|---|
+| `voucherUploadOrchestrate(config, mode)` | Full upload session: read folder → login → upload all files → retry |
 
 ## Logs
 
@@ -69,5 +93,5 @@ logs/error.log      — error logs only
 
 ## Documentation
 
-- [`docs/FLOW.md`](docs/FLOW.md) — process flow
-- [`docs/STRUCTURE.md`](docs/STRUCTURE.md) — project structure
+- [`docs/FLOW.md`](docs/FLOW.md) — process flow for each operation
+- [`docs/STRUCTURE.md`](docs/STRUCTURE.md) — project structure and module descriptions

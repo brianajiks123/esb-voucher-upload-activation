@@ -3,22 +3,22 @@
 ```
 esb-voucher-upload-activation/
 ├── docs/
-│   ├── FLOW.md               # Process flow for each mode
+│   ├── FLOW.md               # Process flow for each operation
 │   └── STRUCTURE.md          # This file
 ├── files/
-│   ├── create/               # Place .xlsx files for CREATE mode
-│   └── activate/             # Place .xlsx files for ACTIVATE mode
+│   ├── create/               # Place .xlsx files for CREATE mode (CLI)
+│   └── activate/             # Place .xlsx files for ACTIVATE mode (CLI)
 ├── logs/
 │   ├── combined.log          # All logs (auto-generated)
 │   └── error.log             # Error logs only (auto-generated)
 ├── src/
 │   ├── config/
-│   │   └── credentials.js        # Reads ESB_USERNAME & ESB_PASSWORD from .env
+│   │   └── credentials.js        # Credential sets loaded from .env
 │   ├── core/
-│   │   ├── browser.js            # Puppeteer browser lifecycle (launch, close, health check)
-│   │   ├── esbServices.js        # ESB ERP actions: login, navigate, upload, check, extend, delete
-│   │   ├── orchestrator.js       # Main flow: read folder → login → upload all files → retry
-│   │   └── puppeteerActions.js   # DOM helpers: click, type, upload, wait, voucher operations
+│   │   ├── browser.js            # Puppeteer browser lifecycle
+│   │   ├── esbServices.js        # High-level ESB ERP operations
+│   │   ├── orchestrator.js       # Upload session orchestration with retry
+│   │   └── puppeteerActions.js   # Low-level DOM helpers and voucher actions
 │   └── utils/
 │       ├── delay.js              # Promise-based delay helper
 │       └── logger.js             # Winston logger (WIB timezone, file + console)
@@ -37,36 +37,70 @@ esb-voucher-upload-activation/
 CLI entry point. Reads `create` or `activate` argument, resolves source folder, calls `voucherUploadOrchestrate`, prints summary.
 
 ### `src/config/credentials.js`
-Exposes `credentials` object with `username` and `password` from `ESB_USERNAME` / `ESB_PASSWORD` env vars.
+Exposes a single `credentials` object with `username` and `password` loaded from env vars (`IMVB_USERNAME` / `IMVB_PASSWORD` or `BURGAS_USERNAME` / `BURGAS_PASSWORD`).
+
+> When used as a library by `bot-voucher-esb`, credentials are resolved per-branch by that project's own `credentials.js` and passed directly to service functions.
 
 ### `src/core/browser.js`
 Manages the Puppeteer browser instance:
 - `launch(url)` — reuses existing browser if alive, restarts if dead; clears history, closes extra tabs, navigates to URL
 - `close()` — clears history then force-closes browser
 - `getPage()` — returns active page instance
+- `isBrowserAlive()` — checks browser process and connection state
 - `SHOW_BROWSER=true` → visible browser; `false` → headless shell
 
 ### `src/core/puppeteerActions.js`
-Low-level DOM helpers:
-- `click`, `clickWithEvaluate`, `typeInto`, `uploadFile`, `elementExists`, `waitForElement`
-- `waitForUploadProcess` — polls upload queue until status clears
-- `downloadErrorFile`, `parseErrorExcel` — download and parse ESB error Excel
-- `checkVoucherByCode` — search voucher via table filter, return row data
-- `extendVoucherExpiry` — search → checkbox → check btnUpdate → fill date → confirm; returns `{ found, buttonAvailable, status, success }`
-- `deleteVoucher` — search → checkbox → check btnDelete → fill modal (Purpose + Journal Date) → Process; returns `{ found, buttonAvailable, status, success }`
+Low-level DOM helpers and voucher-specific actions:
+
+**Helpers:**
+- `waitForElement(selector, timeout)` — polls until element appears
+- `waitForNavigation()` — waits for `networkidle2`
+- `click(selector)` — wait + native click
+- `clickWithEvaluate(selector)` — click via `page.evaluate` (bypasses overlapping elements)
+- `typeInto(selector, text)` — clear + type
+- `uploadFile(filePath, selector)` — set file on `<input type="file">`
+- `elementExists(selector)` — returns boolean
+- `getTextContent(selector)` — returns `innerText`
+- `waitForUploadProcess(selector, content)` — polls upload queue until status clears
+
+**Error file:**
+- `downloadErrorFile()` — triggers download via table button or fallback URL
+- `parseErrorExcel(filePath)` — parses ESB error Excel, extracts per-row error messages
+
+**Voucher actions:**
+- `checkVoucherByCode(code)` — filter table → extract row data (branch, dates, amounts, status)
+- `extendVoucherExpiry(code, newEndDate)` — checkbox → btnUpdate → fill date → confirm
+- `deleteVoucher(code, deletionDate)` — checkbox → btnDelete → modal (Purpose + Journal Date) → Process
+- `activateVoucherByCode(code, purpose, activationDate)` — checkbox → btnActivate → modal (Purpose + Date to Activate) → Save
+
+All voucher action functions return `{ found, buttonAvailable, status, success }`.
 
 ### `src/core/esbServices.js`
-High-level ESB actions:
-- `checkLoginStatus` — navigate to /voucher, check logout link
-- `loginAction` — fill and submit login form, dismiss SweetAlert2 if present
-- `gotoVoucherMenu` — navigate via sidebar (Master → Voucher)
-- `uploadVoucherExcelFile` — upload file, poll result, download error file if needed
-- `checkVoucherCodes` — check one or more codes, return array of results
-- `extendVoucherCodes` — extend expiry for one or more codes; no status pre-check, delegates to `extendVoucherExpiry`
-- `deleteVoucherCodes` — delete one or more codes; no status pre-check, delegates to `deleteVoucher`
+High-level ESB operations that manage login, navigation, and delegate to `puppeteerActions.js`:
+
+| Function | Description |
+|---|---|
+| `checkLoginStatus()` | Navigate to /voucher, check logout link presence |
+| `loginAction(credentials)` | Fill and submit login form, handle SweetAlert2 dialogs |
+| `gotoVoucherMenu()` | Navigate via sidebar: Master → Voucher |
+| `uploadVoucherExcelFile(filePath, mode)` | Upload file, poll result, download error file if needed |
+| `checkVoucherCodes(credentials, codes)` | Check one or more codes, return array of results |
+| `extendVoucherCodes(credentials, codes, newEndDate)` | Extend expiry for one or more codes |
+| `deleteVoucherCodes(credentials, codes, deletionDate)` | Delete one or more codes |
+| `activateVoucherByCodes(credentials, codes, purpose, activationDate)` | Check status per code → activate if available |
+
+`activateVoucherByCodes` performs a silent status check before activation:
+- Status `available` → proceeds with `activateVoucherByCode`
+- Other status → records `{ reason: 'not_available', status }` and skips
 
 ### `src/core/orchestrator.js`
-Manages the full upload session: read files → login check → navigate → upload per file → retry on session error → return results array.
+Manages the full upload session:
+- Reads all `.xlsx` / `.xls` files from `folderPath`
+- Checks login, navigates to voucher menu
+- Uploads each file via `uploadVoucherExcelFile`
+- Per-file errors are recorded as `✗ Failed` (process continues)
+- Session-level errors trigger retry up to **2x** (`attempt × 5s` delay)
+- Login errors are permanent — no retry
 
 ### `src/utils/logger.js`
 Winston logger with WIB timezone, outputs to console (non-production) and `logs/` files.

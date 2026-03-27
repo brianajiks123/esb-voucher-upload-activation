@@ -418,10 +418,10 @@ async function deleteVoucher(voucherCode, deletionDate) {
 
 /**
  * Activate a single voucher by code via the ESB ERP table.
- * Flow: search → verify exists & status === 'available' → check checkbox → click Activate → confirm modal
+ * Flow: search → verify exists → check checkbox → click Activate → fill Purpose + Date → Save
  * Returns { found, status, buttonAvailable, success }
  */
-async function activateVoucherByCode(voucherCode) {
+async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   const page = getPage();
   const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
 
@@ -454,60 +454,87 @@ async function activateVoucherByCode(voucherCode) {
     return { found: true, buttonAvailable: false, status: rowData.status, success: false };
   }
 
-  // Step 4: click Activate button
+  // Step 4: click Activate button → wait for modal
   await clickWithEvaluate('a#btnActivate');
   await waitForElement('#myModalActivate', 10000);
   await delay(1000);
 
-  // Step 5: fill Journal Date in modal (same modal as delete)
-  const today = new Date();
-  const dd = String(today.getDate()).padStart(2, '0');
-  const mm = String(today.getMonth() + 1).padStart(2, '0');
-  const yyyy = today.getFullYear();
-  const todayStr = `${dd}-${mm}-${yyyy}`;
+  // Step 5: open Select2 Purpose dropdown via native mouse click
+  const purposeCoords = await page.evaluate(() => {
+    const sel = document.querySelector('#myModalActivate #w4 span.select2-selection--single');
+    if (!sel) return null;
+    const r = sel.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  if (!purposeCoords) throw new Error('Select2 Purpose trigger not found in modal #w4');
 
+  await page.mouse.click(purposeCoords.x, purposeCoords.y);
+  await delay(800);
+
+  await waitForElement('span.select2-container--open', 5000);
+  const searchField = 'span.select2-container--open span.select2-search--dropdown input.select2-search__field';
+  await waitForElement(searchField, 3000);
+
+  // Type the purpose keyword and press Enter to select
+  await page.type(searchField, purpose);
+  await delay(500);
+  await page.keyboard.press('Enter');
+  await delay(800);
+
+  // Step 6: fill Date to Activate (krajee datepicker, format DD-MM-YYYY)
   const dateInput = '#myModalActivate #msvoucher-voucherstartdateactivate-disp';
-  const dateExists = await elementExists(dateInput);
-  if (dateExists) {
-    await page.evaluate((sel, val) => {
-      const el = document.querySelector(sel);
-      if (!el) return;
-      el.value = val;
-      el.dispatchEvent(new Event('input',  { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.dispatchEvent(new Event('blur',   { bubbles: true }));
-    }, dateInput, todayStr);
-    await delay(500);
-  }
+  await waitForElement(dateInput, 5000);
+  await page.evaluate((sel, val) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    el.value = '';
+    el.value = val;
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur',   { bubbles: true }));
+  }, dateInput, activationDate);
+  await delay(500);
 
-  // Step 6: click Process/Confirm button
+  // Verify both fields are filled before submitting
+  const fields = await page.evaluate((dateSel) => {
+    const purposeEl = document.querySelector('#myModalActivate span#select2-purposeIDHead-container');
+    const dateEl    = document.querySelector(dateSel);
+    return {
+      purpose: purposeEl?.textContent.trim() || '',
+      date:    dateEl?.value.trim() || '',
+    };
+  }, dateInput);
+
+  logger.info(`Activate modal — Purpose: "${fields.purpose}" | Date: "${fields.date}"`);
+
+  if (!fields.purpose || fields.purpose === '- Select Purpose -')
+    throw new Error(`Purpose belum terpilih: "${fields.purpose}"`);
+  if (!fields.date)
+    throw new Error('Date to Activate belum terisi.');
+
+  // Click outside to dismiss any open picker
+  await page.evaluate(() => document.querySelector('#myModalActivate .panel-body')?.click());
+  await delay(400);
+
+  // Step 7: click Save button via native mouse click
   const btnProcess = '#myModalActivate .panel-footer .pull-right a#btnSaveModal';
-  const btnExists = await elementExists(btnProcess);
-  if (btnExists) {
-    const btnCoords = await page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    }, btnProcess);
-    if (btnCoords) {
-      await page.mouse.click(btnCoords.x, btnCoords.y);
-    } else {
-      await clickWithEvaluate(btnProcess);
-    }
-  } else {
-    // Fallback: try confirm button directly
-    const btnConfirm = '#myModalActivate a.btn-primary, #myModalActivate button.btn-primary';
-    await waitForElement(btnConfirm, 5000);
-    await clickWithEvaluate(btnConfirm);
-  }
+  await waitForElement(btnProcess, 5000);
+  const btnCoords = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, btnProcess);
+  if (!btnCoords) throw new Error('Tombol Save tidak ditemukan.');
+
+  await page.mouse.click(btnCoords.x, btnCoords.y);
 
   // Wait for page reload after activation
   await waitForNavigation().catch(() => {});
   await waitForElement(filterInput, 15000);
   await delay(500);
 
-  logger.info(`Voucher ${voucherCode} activated`);
+  logger.info(`Voucher ${voucherCode} activated | purpose: ${purpose} | date: ${activationDate}`);
   return { found: true, buttonAvailable: true, status: rowData.status, success: true };
 }
 

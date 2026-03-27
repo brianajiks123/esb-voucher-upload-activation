@@ -242,7 +242,7 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
  * Flow per code: check status → if 'available' activate directly, else report status to caller.
  * Returns array of { voucherCode, success, reason, status, message }
  */
-async function activateVoucherByCodes(credentials, codes) {
+async function activateVoucherByCodes(credentials, codes, purpose, activationDate) {
   const isLoggedIn = await checkLoginStatus();
   if (!isLoggedIn) {
     await loginAction(credentials);
@@ -271,7 +271,7 @@ async function activateVoucherByCodes(credentials, codes) {
       }
 
       // Status is available — proceed with activation
-      const r = await activateVoucherByCode(trimmed);
+      const r = await activateVoucherByCode(trimmed, purpose, activationDate);
       if (!r.found) {
         results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
       } else if (!r.buttonAvailable) {
