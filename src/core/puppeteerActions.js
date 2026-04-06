@@ -405,9 +405,12 @@ async function deleteVoucher(voucherCode, deletionDate) {
 
   await page.mouse.click(btnCoords.x, btnCoords.y);
 
-  // Wait for page reload after delete, then wait for voucher table to be ready
+  // Wait for page reload after delete.
+  // Use waitForNavigation + waitForSelector (not custom waitForElement) to avoid
+  // "Execution context was destroyed" — page.waitForSelector handles context lifecycle safely.
   await waitForNavigation().catch(() => {});
-  await waitForElement(filterInput, 15000);
+  await delay(500);
+  await page.waitForSelector(filterInput, { timeout: 15000 });
   await delay(500);
 
   logger.info(`Voucher ${voucherCode} deleted | date: ${deletionDate}`);

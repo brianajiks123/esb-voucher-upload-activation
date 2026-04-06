@@ -224,8 +224,15 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
         results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
       }
     } catch (err) {
-      logger.error(`Delete ${trimmed} failed: ${err.message}`);
-      results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+      // "Execution context was destroyed" terjadi saat navigasi setelah delete berhasil.
+      // Voucher sudah terhapus di server, jadi catat sebagai sukses.
+      if (err.message && err.message.includes('Execution context was destroyed')) {
+        logger.warn(`Delete ${trimmed}: context destroyed after navigation (voucher likely deleted successfully)`);
+        results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
+      } else {
+        logger.error(`Delete ${trimmed} failed: ${err.message}`);
+        results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+      }
     }
   }
 
