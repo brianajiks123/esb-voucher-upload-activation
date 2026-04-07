@@ -31,16 +31,33 @@ cp .env.example .env
 
 ```env
 ESB_BASE_URL=erp_base_url
+
+# Credentials for IMVB branches (IDEOLOGIS+, MAARI VENTURA, MAARI BSB)
 IMVB_USERNAME=your_imvb_username
 IMVB_PASSWORD=your_imvb_password
+
+# Credentials for BURGAS branches (BURJO NGEGAS GOMBEL, BURJO NGEGAS PLEBURAN)
 BURGAS_USERNAME=your_burgas_username
 BURGAS_PASSWORD=your_burgas_password
+
 SHOW_BROWSER=false
 LOG_LEVEL=debug
 NODE_ENV=development
 ```
 
 `SHOW_BROWSER=true` shows the browser window during automation. `false` runs headless (default).
+
+## Supported Branches
+
+Credentials are resolved per-branch. The following branches are supported:
+
+| Branch | Alias | Credential Group |
+|---|---|---|
+| IDEOLOGIS+ | `ideo` | IMVB |
+| MAARI VENTURA | `ventura` | IMVB |
+| MAARI BSB | `bsb` | IMVB |
+| BURJO NGEGAS GOMBEL | `burgas gombel` | BURGAS |
+| BURJO NGEGAS PLEBURAN | `burgas pleburan` | BURGAS |
 
 ## CLI Usage
 
@@ -83,6 +100,15 @@ And from `src/core/orchestrator.js`:
 | Function | Description |
 |---|---|
 | `voucherUploadOrchestrate(config, mode)` | Full upload session: read folder → login → upload all files → retry |
+
+Credentials are resolved per-branch using helpers from `src/config/credentials.js`:
+
+```js
+const { resolveBranchKey, getCredentialsForBranch } = require('./src/config/credentials');
+
+const branchKey  = resolveBranchKey('ventura');       // → 'maari_ventura'
+const creds      = getCredentialsForBranch(branchKey); // → { username, password }
+```
 
 ## Logs
 

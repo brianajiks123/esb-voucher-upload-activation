@@ -29,27 +29,39 @@ checkLoginStatus() → launch browser → navigate to /voucher
    ┌────┴────┐
 Logged in   Not logged in
                   │
-            loginAction()
-              ├─ Fill username + password → submit
-              ├─ Confirmation dialog → confirm + waitForNavigation
-              └─ Error dialog → throw isLoginError (no retry)
+            loginAction({ username, password })
+              ├─ Fill #loginform-username + #loginform-password → click #btnLogin
+              ├─ Wait 2s → check for SweetAlert2 (.swal2-confirm.swal2-styled)
+              ├─ Confirmation dialog (sure/continue/lanjut/konfirmasi)
+              │    └─ Click OK → waitForNavigation
+              ├─ Error dialog → click OK → throw isLoginError (no retry)
+              └─ Verify logout link present → throw isLoginError if missing
         │
         ▼
-gotoVoucherMenu() → Master → Voucher
+gotoVoucherMenu() → click a[href='/master/index'] → click a[href='/voucher']
         │
         ▼
-For each file:
-  1. Click "Upload" button (button.btnUpload)
-  2. Click mode tab: codeMode 1 (CREATE) or 3 (ACTIVATE)
-  3. Set file to upload input (#fileUpload or #voucherActivate)
-  4. Click submit (#btnSubmitUpload or #btnSubmitActivate)
-  5. Poll upload queue (#data-table-upload-queue > tbody > tr) until status clears "process"
-  6. If failed rows → downloadErrorFile() → parseErrorExcel()
-  7. Close upload queue modal (#close-upload-queue)
+For each .xlsx / .xls file:
+  1. delay(1000) → click button.btnUpload
+  2. delay(1000) → clickWithEvaluate a[href='/voucher/#?mode=<codeMode>']
+                   CREATE: codeMode=1 | ACTIVATE: codeMode=3
+  3. delay(1000) → uploadFile(filePath, uploadEl)
+                   CREATE: #fileUpload | ACTIVATE: #voucherActivate
+  4. delay(1000) → clickWithEvaluate submitButton
+                   CREATE: #btnSubmitUpload | ACTIVATE: #btnSubmitActivate
+  5. waitForUploadProcess('#data-table-upload-queue > tbody > tr', 'process', 2000)
+     → poll until row text no longer contains "process"
+  6. If result contains "failed" or "error":
+       → downloadErrorFile() via .upload-queue-download-btn (CDP download)
+       → parseErrorExcel() → log per-row errors (row, voucherCode, branchName, messages)
+  7. clickWithEvaluate('#close-upload-queue')
   8. Save result: ✓ Success / ✗ Failed (with errorFilePath if available)
         │
         ▼
-close() → return results[]
+close() → clearBrowserHistory() → forceCloseBrowser()
+        │
+        ▼
+Return results[]
 ```
 
 ---
@@ -60,26 +72,38 @@ close() → return results[]
 activateVoucherByCodes(credentials, codes, purpose, activationDate)
         │
         ▼
-Login check → navigate to /voucher
+checkLoginStatus() → launch browser → navigate to /voucher
+        │
+   ┌────┴────┐
+Logged in   Not logged in → loginAction() → gotoVoucherMenu()
+        │
+        ▼
+delay(1500)
         │
         ▼
 For each code:
-  1. checkVoucherByCode() — get current status from table
-  2. Status != 'available'
-     └─ Record { reason: 'not_available', status } — skip activation
-  3. Status == 'available'
-     └─ activateVoucherByCode(code, purpose, activationDate)
-           ├─ Filter table by voucher code
-           ├─ Check row checkbox
-           ├─ Check if btnActivate (a#btnActivate) is available
-           │    └─ NOT found → { found: true, buttonAvailable: false, status }
-           └─ Found → click btnActivate → modal #myModalActivate opens
-                    → fill Purpose (Select2, type keyword → Enter)
-                    → fill Date to Activate (DD-MM-YYYY)
-                    → verify both fields filled
-                    → click Save (a#btnSaveModal, native mouse click)
-                    → waitForNavigation → waitForElement (table ready)
-                    → return { success: true }
+  1. checkVoucherByCode(code) — filter table, extract status
+     └─ Not found → { success: false, reason: 'not_found' }
+  2. status != 'available'
+     └─ { success: false, reason: 'not_available', status }
+  3. status == 'available' → activateVoucherByCode(code, purpose, activationDate)
+       a. Filter table by code → verify row exists
+       b. Check row checkbox (td[data-col-seq="12"] input.kv-row-checkbox)
+       c. Check if a#btnActivate exists
+          └─ NOT found → { found: true, buttonAvailable: false, status }
+       d. clickWithEvaluate('a#btnActivate') → waitForElement('#myModalActivate')
+       e. Open Select2 Purpose dropdown (native mouse click on #w4 span.select2-selection--single)
+          → type `purpose` keyword → Enter to select
+       f. Fill Date to Activate (#msvoucher-voucherstartdateactivate-disp, DD-MM-YYYY)
+          via page.evaluate (input + change + blur events)
+       g. Verify Purpose and Date fields are filled
+       h. Click outside to dismiss picker
+       i. Click Save (a#btnSaveModal, native mouse click via getBoundingClientRect)
+       j. waitForNavigation → waitForElement(filterInput, 15000)
+       k. Return { found: true, buttonAvailable: true, status, success: true }
+        │
+        ▼
+Clear localStorage + sessionStorage → close()
         │
         ▼
 Return results[]
@@ -93,13 +117,21 @@ Return results[]
 checkVoucherCodes(credentials, codes)
         │
         ▼
-Login check → navigate to /voucher
+checkLoginStatus() → launch browser → navigate to /voucher
+        │
+   ┌────┴────┐
+Logged in   Not logged in → loginAction() → gotoVoucherMenu()
+        │
+        ▼
+delay(1500)
         │
         ▼
 For each code:
   checkVoucherByCode(code)
-    ├─ Type code into filter input → Enter → wait 1.5s
+    ├─ Type code into filter input (#grid-voucher-container ... input[name="MsVoucher[voucherID]"])
+    ├─ Press Enter → delay(1500)
     ├─ Find row: tr[data-key="CODE"]
+    │    └─ Not found → { voucherCode, found: false }
     └─ Extract columns:
          seq 3  → branch
          seq 4  → startDate
@@ -109,6 +141,10 @@ For each code:
          seq 9  → voucherSalesPrice
          seq 10 → additionalInfo
          seq 11 → status
+         → { voucherCode, found: true, data: { ... } }
+        │
+        ▼
+Clear localStorage + sessionStorage → close()
         │
         ▼
 Return results[]
@@ -122,21 +158,30 @@ Return results[]
 extendVoucherCodes(credentials, codes, newEndDate)
         │
         ▼
-Login check → navigate to /voucher
+checkLoginStatus() → launch browser → navigate to /voucher
+        │
+   ┌────┴────┐
+Logged in   Not logged in → loginAction() → gotoVoucherMenu()
+        │
+        ▼
+delay(1500)
         │
         ▼
 For each code:
   extendVoucherExpiry(code, newEndDate)
-    1. Filter table by voucher code
-    2. Verify row exists → get current status
-    3. Check row checkbox
-    4. Look for btnUpdate (a#btnUpdate[href="/voucher/update-voucher-length"])
-       ├─ NOT found → { found: true, buttonAvailable: false, status }
-       └─ Found → click btnUpdate
-                → fill new end date (#msvoucher-voucherenddateupdate-disp)
-                → click btnUpdateModal
-                → waitForNavigation → waitForElement (table ready)
-                → return { success: true }
+    1. Filter table by code → verify row exists → get status
+       └─ Not found → { found: false, buttonAvailable: false, status: null, success: false }
+    2. Check row checkbox
+    3. Check if a#btnUpdate[href="/voucher/update-voucher-length"] exists
+       └─ NOT found → { found: true, buttonAvailable: false, status, success: false }
+    4. clickWithEvaluate('a#btnUpdate[...]')
+       → fill #msvoucher-voucherenddateupdate-disp (dispatch change event)
+       → waitForElement('a#btnUpdateModal') → clickWithEvaluate('a#btnUpdateModal')
+       → waitForNavigation → waitForElement(filterInput, 15000)
+       → return { found: true, buttonAvailable: true, status, success: true }
+        │
+        ▼
+Clear localStorage + sessionStorage → close()
         │
         ▼
 Return results[]
@@ -150,23 +195,38 @@ Return results[]
 deleteVoucherCodes(credentials, codes, deletionDate)
         │
         ▼
-Login check → navigate to /voucher
+checkLoginStatus() → launch browser → navigate to /voucher
+        │
+   ┌────┴────┐
+Logged in   Not logged in → loginAction() → gotoVoucherMenu()
+        │
+        ▼
+delay(1500)
         │
         ▼
 For each code:
   deleteVoucher(code, deletionDate)
-    1. Filter table by voucher code
-    2. Verify row exists → get current status
-    3. Check row checkbox
-    4. Look for btnDelete (a#btnDelete)
-       ├─ NOT found → { found: true, buttonAvailable: false, status }
-       └─ Found → click btnDelete → modal #myModalActivate opens
-                → fill Purpose (Select2, type "voucher" → Enter)
-                → fill Journal Date (#msvoucher-voucherstartdateactivate-disp, DD-MM-YYYY)
-                → verify both fields filled
-                → click Process (a#btnSaveModal, native mouse click)
-                → waitForNavigation → waitForElement (table ready)
-                → return { success: true }
+    1. Filter table by code → verify row exists → get status
+       └─ Not found → { found: false, buttonAvailable: false, status: null, success: false }
+    2. Check row checkbox
+    3. Check if a#btnDelete exists
+       └─ NOT found → { found: true, buttonAvailable: false, status, success: false }
+    4. waitForElement('a#btnDelete') → clickWithEvaluate('a#btnDelete')
+       → waitForElement('#myModalActivate', 10000)
+    5. Open Select2 Purpose dropdown (native mouse click via getBoundingClientRect on #w4)
+       → type "voucher" → Enter to select
+    6. Fill Journal Date (#msvoucher-voucherstartdateactivate-disp, DD-MM-YYYY)
+       via page.evaluate (input + change + blur events)
+    7. Verify Purpose and Date fields are filled
+    8. Click outside to dismiss picker
+    9. Click Process (a#btnSaveModal, native mouse click via getBoundingClientRect)
+   10. waitForNavigation → page.waitForSelector(filterInput, { timeout: 15000 })
+       Note: "Execution context was destroyed" after navigation is treated as success
+             (voucher already deleted server-side)
+   11. Return { found: true, buttonAvailable: true, status, success: true }
+        │
+        ▼
+Clear localStorage + sessionStorage → close()
         │
         ▼
 Return results[]
@@ -184,12 +244,33 @@ Login errors (`isLoginError = true`) are permanent — no retry.
 
 ---
 
+## Credential Resolution
+
+Credentials are resolved per-branch via `src/config/credentials.js`:
+
+```
+resolveBranchKey(userInput)
+  ├─ 'ideo' / 'ideologist' / 'ideologis+' → 'ideologist'
+  ├─ 'ventura' / 'maari ventura'          → 'maari_ventura'
+  ├─ 'bsb' / 'maari bsb'                 → 'maari_bsb'
+  ├─ 'burgas gombel' / 'burjo ngegas gombel'     → 'burgas_gombel'
+  └─ 'burgas pleburan' / 'burjo ngegas pleburan' → 'burgas_pleburan'
+
+getCredentialsForBranch(branchKey)
+  ├─ ideologist / maari_ventura / maari_bsb → IMVB_USERNAME / IMVB_PASSWORD
+  └─ burgas_gombel / burgas_pleburan        → BURGAS_USERNAME / BURGAS_PASSWORD
+```
+
+---
+
 ## Browser Session
 
 Puppeteer uses a persistent `UserData/` directory to preserve login cookies across runs. `checkLoginStatus()` verifies the logout link before attempting login, reducing overhead for consecutive operations.
 
 `SHOW_BROWSER=true` → visible browser window  
 `SHOW_BROWSER=false` → headless shell (default)
+
+Browser is reused across operations within the same session. If the browser process dies or disconnects, it is automatically restarted on the next `launch()` call.
 
 ---
 
