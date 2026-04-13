@@ -8,9 +8,6 @@ const { delay } = require('../utils/delay');
 
 // ─── Wait Helpers ─────────────────────────────────────────────────────────────
 
-/**
- * Poll for a DOM element until it appears or timeout is reached.
- */
 async function waitForElement(selector, timeout = 10000, interval = 1000) {
   let elapsed = 0;
   while (elapsed < timeout) {
@@ -22,23 +19,18 @@ async function waitForElement(selector, timeout = 10000, interval = 1000) {
   throw new Error(`Element "${selector}" not found after ${timeout / 1000}s`);
 }
 
-/** Wait for page navigation to complete (networkidle2) */
 async function waitForNavigation() {
   await getPage().waitForNavigation({ waitUntil: 'networkidle2' });
 }
 
 // ─── Click Actions ────────────────────────────────────────────────────────────
 
-/** Wait for element then click it */
 async function click(selector) {
   await waitForElement(selector);
   logger.debug(`Click: ${selector}`);
   await getPage().click(selector);
 }
 
-/**
- * Click via page.evaluate — use when native click is blocked by overlapping elements.
- */
 async function clickWithEvaluate(selector) {
   logger.debug(`Click (eval): ${selector}`);
   await getPage().evaluate((sel) => document.querySelector(sel).click(), selector);
@@ -46,7 +38,6 @@ async function clickWithEvaluate(selector) {
 
 // ─── Input Actions ────────────────────────────────────────────────────────────
 
-/** Clear and type text into an input field */
 async function typeInto(selector, text) {
   await waitForElement(selector);
   await getPage().focus(selector);
@@ -55,7 +46,6 @@ async function typeInto(selector, text) {
   logger.debug(`Type into: ${selector}`);
 }
 
-/** Set a file on a file input element */
 async function uploadFile(filePath, selectorInput = "input[type='file']") {
   await waitForElement(selectorInput);
   const input = await getPage().$(selectorInput);
@@ -66,21 +56,16 @@ async function uploadFile(filePath, selectorInput = "input[type='file']") {
 
 // ─── Read Actions ─────────────────────────────────────────────────────────────
 
-/** Returns true if the selector exists in the DOM */
 async function elementExists(selector) {
   return getPage().evaluate((sel) => !!document.querySelector(sel), selector);
 }
 
-/** Returns innerText of the first matching element */
 async function getTextContent(selector) {
   return getPage().evaluate((sel) => document.querySelector(sel).innerText, selector);
 }
 
 // ─── Upload Process ───────────────────────────────────────────────────────────
 
-/**
- * Poll upload queue row until status clears "process", then return final row text.
- */
 async function waitForUploadProcess(selector, content, interval = 500, timeout = 10000) {
   let elapsed = 0;
   while (elapsed < timeout) {
@@ -94,10 +79,6 @@ async function waitForUploadProcess(selector, content, interval = 500, timeout =
 
 // ─── Error File Helpers ───────────────────────────────────────────────────────
 
-/**
- * Download ESB error Excel after a failed upload.
- * Tries the table download button first; falls back to fallbackUrl if provided.
- */
 async function downloadErrorFile(fallbackUrl = null) {
   const page = getPage();
   const downloadPath = fs.mkdtempSync(path.join(os.tmpdir(), 'esb-err-'));
@@ -124,7 +105,6 @@ async function downloadErrorFile(fallbackUrl = null) {
   return filePath;
 }
 
-/** Poll directory until a complete (non-.crdownload) file appears */
 async function waitForDownloadedFile(dir, timeout = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -135,11 +115,6 @@ async function waitForDownloadedFile(dir, timeout = 15000) {
   throw new Error(`File not downloaded within ${timeout / 1000}s`);
 }
 
-/**
- * Parse ESB error Excel file.
- * Finds the header row by locating "Voucher Code" column.
- * Error message is always in the last cell of each data row (column K — no header).
- */
 async function parseErrorExcel(filePath) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
@@ -171,7 +146,6 @@ async function parseErrorExcel(filePath) {
     if (rowNumber <= headerRowIdx) return;
     const vals = row.values.slice(1);
 
-    // Error message is always the last non-empty cell in the row
     let errorMessage = '';
     for (let i = vals.length - 1; i >= 0; i--) {
       const v = String(vals[i] ?? '').trim();
@@ -190,20 +164,96 @@ async function parseErrorExcel(filePath) {
   return errors;
 }
 
+// ─── Rate Limit Helpers ───────────────────────────────────────────────────────
+
+const VOUCHER_FILTER_SELECTOR = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
+const RATE_LIMIT_CONTAINER    = 'div.error-message';
+const RATE_LIMIT_BUTTON       = 'div.error-message button[onclick="location.reload();"]';
+
+async function isRateLimited() {
+  const page = getPage();
+  return page.evaluate((containerSel) => {
+    const el = document.querySelector(containerSel);
+    if (!el) return false;
+    const h1 = el.querySelector('h1');
+    return h1 ? h1.innerText.toLowerCase().includes('rate limit') : false;
+  }, RATE_LIMIT_CONTAINER);
+}
+
+async function refreshAndWaitForVoucherPage(timeoutMs = 20000) {
+  const page = getPage();
+  logger.warn('Rate limit detected — clicking "Refresh Page" button...');
+  try {
+    const btnExists = await page.evaluate((sel) => !!document.querySelector(sel), RATE_LIMIT_BUTTON);
+    if (btnExists) {
+      logger.info('Clicking rate-limit "Refresh Page" button...');
+      await page.evaluate((sel) => document.querySelector(sel).click(), RATE_LIMIT_BUTTON);
+    } else {
+      logger.warn('"Refresh Page" button not found — falling back to page.reload()');
+      await page.reload({ waitUntil: 'networkidle2', timeout: timeoutMs });
+    }
+
+    await delay(2000);
+
+    const hasLoginForm = await page.evaluate(() => !!document.querySelector('#loginform-username'));
+    if (hasLoginForm) {
+      logger.warn('Redirected to login after refresh — session expired.');
+      return false;
+    }
+
+    await waitForElement(VOUCHER_FILTER_SELECTOR, timeoutMs);
+    logger.info('Voucher page recovered after rate-limit refresh.');
+    return true;
+  } catch (err) {
+    logger.error(`Failed to recover after rate-limit refresh: ${err.message}`);
+    return false;
+  }
+}
+
 // ─── Voucher Check ────────────────────────────────────────────────────────────
 
-/**
- * Search voucher by code via table filter input.
- */
 async function checkVoucherByCode(voucherCode) {
   const page = getPage();
-  const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
+  const filterInput = VOUCHER_FILTER_SELECTOR;
+  const MAX_POLLS = 10;
+  const RATE_LIMIT_CHECK_AFTER = 3;
 
-  await waitForElement(filterInput);
+  let polls = 0;
+  while (true) {
+    const found = await page.evaluate((sel) => !!document.querySelector(sel), filterInput);
+    if (found) break;
+
+    polls++;
+
+    if (polls >= RATE_LIMIT_CHECK_AFTER) {
+      const rateLimited = await isRateLimited();
+      if (rateLimited) {
+        const err = new Error(`Element "${filterInput}" not found after ${polls}s — rate limit detected`);
+        err.isRateLimit = true;
+        throw err;
+      }
+    }
+
+    if (polls >= MAX_POLLS) {
+      throw new Error(`Element "${filterInput}" not found after ${MAX_POLLS}s`);
+    }
+
+    await delay(1000);
+  }
+
   await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, filterInput);
   await page.type(filterInput, voucherCode);
   await page.keyboard.press('Enter');
-  await delay(1500);
+
+  for (let i = 0; i < 3; i++) {
+    await delay(500);
+    const rateLimited = await isRateLimited();
+    if (rateLimited) {
+      const err = new Error('Rate limit detected while waiting for table after filter');
+      err.isRateLimit = true;
+      throw err;
+    }
+  }
 
   return page.evaluate((code) => {
     const row = document.querySelector(
@@ -227,10 +277,6 @@ async function checkVoucherByCode(voucherCode) {
 
 // ─── Voucher Extend ───────────────────────────────────────────────────────────
 
-/**
- * Extend voucher expiry date.
- * Flow: search → verify exists → check checkbox → check btnUpdate → fill date → confirm
- */
 async function extendVoucherExpiry(voucherCode, newEndDate) {
   const page = getPage();
   const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
@@ -241,7 +287,6 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
   await page.keyboard.press('Enter');
   await delay(1500);
 
-  // Step 1: verify voucher exists in table
   const rowData = await page.evaluate((code) => {
     const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
     if (!row) return null;
@@ -250,7 +295,6 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
 
   if (!rowData) return { found: false, buttonAvailable: false, status: null, success: false };
 
-  // Step 2: check the row checkbox
   await page.evaluate((code) => {
     const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
     const cb = row?.querySelector('td[data-col-seq="12"] input[type="checkbox"].kv-row-checkbox');
@@ -258,13 +302,11 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
   }, voucherCode);
   await delay(500);
 
-  // Step 3: check if Update button is available (only shown for eligible statuses)
   const btnUpdateExists = await elementExists('a#btnUpdate[href="/voucher/update-voucher-length"]');
   if (!btnUpdateExists) {
     return { found: true, buttonAvailable: false, status: rowData.status, success: false };
   }
 
-  // Step 4: click Update → fill new end date → confirm
   await clickWithEvaluate('a#btnUpdate[href="/voucher/update-voucher-length"]');
   await delay(1000);
 
@@ -279,7 +321,6 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
   await waitForElement('a#btnUpdateModal');
   await clickWithEvaluate('a#btnUpdateModal');
 
-  // Wait for page reload after update, then wait for voucher table to be ready
   await waitForNavigation().catch(() => {});
   await waitForElement(filterInput, 15000);
   await delay(500);
@@ -290,15 +331,10 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
 
 // ─── Voucher Delete ───────────────────────────────────────────────────────────
 
-/**
- * Delete a voucher.
- * Flow: search → verify exists → check checkbox → check btnDelete → fill modal (Purpose + Journal Date) → Process
- */
 async function deleteVoucher(voucherCode, deletionDate) {
   const page = getPage();
   const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
 
-  // Step 1: search and verify voucher exists
   await waitForElement(filterInput);
   await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, filterInput);
   await page.type(filterInput, voucherCode);
@@ -313,7 +349,6 @@ async function deleteVoucher(voucherCode, deletionDate) {
 
   if (!rowData) return { found: false, buttonAvailable: false, status: null, success: false };
 
-  // Step 2: check the row checkbox
   await page.evaluate((code) => {
     const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
     const cb = row?.querySelector('td[data-col-seq="12"] input[type="checkbox"].kv-row-checkbox');
@@ -321,20 +356,16 @@ async function deleteVoucher(voucherCode, deletionDate) {
   }, voucherCode);
   await delay(500);
 
-  // Step 3: check if Delete button is available (only shown for eligible statuses)
   const btnDeleteExists = await elementExists('a#btnDelete');
   if (!btnDeleteExists) {
     return { found: true, buttonAvailable: false, status: rowData.status, success: false };
   }
 
-  // Step 4: click Delete → fill modal → Process
   await waitForElement('a#btnDelete');
   await clickWithEvaluate('a#btnDelete');
   await waitForElement('#myModalActivate', 10000);
   await delay(1000);
 
-  // Open Select2 Purpose dropdown via native mouse click (Select2 requires mousedown)
-  // Multiple elements share the same id, so scope to modal form #w4
   const purposeCoords = await page.evaluate(() => {
     const sel = document.querySelector('#myModalActivate #w4 span.select2-selection--single');
     if (!sel) return null;
@@ -346,18 +377,15 @@ async function deleteVoucher(voucherCode, deletionDate) {
   await page.mouse.click(purposeCoords.x, purposeCoords.y);
   await delay(800);
 
-  // Dropdown renders at body level as span.select2-container--open
   await waitForElement('span.select2-container--open', 5000);
   const searchField = 'span.select2-container--open span.select2-search--dropdown input.select2-search__field';
   await waitForElement(searchField, 3000);
 
-  // Type "voucher" then Enter to select the VOUCHER option
   await page.type(searchField, 'voucher');
   await delay(500);
   await page.keyboard.press('Enter');
   await delay(800);
 
-  // Fill Journal Date input (krajee datepicker, format DD-MM-YYYY)
   const dateInput = '#myModalActivate #msvoucher-voucherstartdateactivate-disp';
   await waitForElement(dateInput, 5000);
   await page.evaluate((sel, val) => {
@@ -371,7 +399,6 @@ async function deleteVoucher(voucherCode, deletionDate) {
   }, dateInput, deletionDate);
   await delay(500);
 
-  // Verify both fields are filled before submitting
   const fields = await page.evaluate((dateSel) => {
     const purposeEl = document.querySelector('#myModalActivate span#select2-purposeIDHead-container');
     const dateEl    = document.querySelector(dateSel);
@@ -388,11 +415,9 @@ async function deleteVoucher(voucherCode, deletionDate) {
   if (!fields.date)
     throw new Error('Journal Date belum terisi.');
 
-  // Click outside fields to dismiss any open picker
   await page.evaluate(() => document.querySelector('#myModalActivate .panel-body')?.click());
   await delay(400);
 
-  // Click Process button via native mouse click
   const btnProcess = '#myModalActivate .panel-footer .pull-right a#btnSaveModal';
   await waitForElement(btnProcess, 5000);
   const btnCoords = await page.evaluate((sel) => {
@@ -405,9 +430,6 @@ async function deleteVoucher(voucherCode, deletionDate) {
 
   await page.mouse.click(btnCoords.x, btnCoords.y);
 
-  // Wait for page reload after delete.
-  // Use waitForNavigation + waitForSelector (not custom waitForElement) to avoid
-  // "Execution context was destroyed" — page.waitForSelector handles context lifecycle safely.
   await waitForNavigation().catch(() => {});
   await delay(500);
   await page.waitForSelector(filterInput, { timeout: 15000 });
@@ -419,11 +441,6 @@ async function deleteVoucher(voucherCode, deletionDate) {
 
 // ─── Voucher Activate by Code ─────────────────────────────────────────────────
 
-/**
- * Activate a single voucher by code via the ESB ERP table.
- * Flow: search → verify exists → check checkbox → click Activate → fill Purpose + Date → Save
- * Returns { found, status, buttonAvailable, success }
- */
 async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   const page = getPage();
   const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
@@ -434,7 +451,6 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   await page.keyboard.press('Enter');
   await delay(1500);
 
-  // Step 1: verify voucher exists and get status
   const rowData = await page.evaluate((code) => {
     const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
     if (!row) return null;
@@ -443,7 +459,6 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
 
   if (!rowData) return { found: false, buttonAvailable: false, status: null, success: false };
 
-  // Step 2: check the row checkbox
   await page.evaluate((code) => {
     const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
     const cb = row?.querySelector('td[data-col-seq="12"] input[type="checkbox"].kv-row-checkbox');
@@ -451,18 +466,15 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   }, voucherCode);
   await delay(500);
 
-  // Step 3: check if Activate button is available
   const btnActivateExists = await elementExists('a#btnActivate');
   if (!btnActivateExists) {
     return { found: true, buttonAvailable: false, status: rowData.status, success: false };
   }
 
-  // Step 4: click Activate button → wait for modal
   await clickWithEvaluate('a#btnActivate');
   await waitForElement('#myModalActivate', 10000);
   await delay(1000);
 
-  // Step 5: open Select2 Purpose dropdown via native mouse click
   const purposeCoords = await page.evaluate(() => {
     const sel = document.querySelector('#myModalActivate #w4 span.select2-selection--single');
     if (!sel) return null;
@@ -478,13 +490,11 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   const searchField = 'span.select2-container--open span.select2-search--dropdown input.select2-search__field';
   await waitForElement(searchField, 3000);
 
-  // Type the purpose keyword and press Enter to select
   await page.type(searchField, purpose);
   await delay(500);
   await page.keyboard.press('Enter');
   await delay(800);
 
-  // Step 6: fill Date to Activate (krajee datepicker, format DD-MM-YYYY)
   const dateInput = '#myModalActivate #msvoucher-voucherstartdateactivate-disp';
   await waitForElement(dateInput, 5000);
   await page.evaluate((sel, val) => {
@@ -498,7 +508,6 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   }, dateInput, activationDate);
   await delay(500);
 
-  // Verify both fields are filled before submitting
   const fields = await page.evaluate((dateSel) => {
     const purposeEl = document.querySelector('#myModalActivate span#select2-purposeIDHead-container');
     const dateEl    = document.querySelector(dateSel);
@@ -515,11 +524,9 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
   if (!fields.date)
     throw new Error('Date to Activate belum terisi.');
 
-  // Click outside to dismiss any open picker
   await page.evaluate(() => document.querySelector('#myModalActivate .panel-body')?.click());
   await delay(400);
 
-  // Step 7: click Save button via native mouse click
   const btnProcess = '#myModalActivate .panel-footer .pull-right a#btnSaveModal';
   await waitForElement(btnProcess, 5000);
   const btnCoords = await page.evaluate((sel) => {
@@ -532,7 +539,6 @@ async function activateVoucherByCode(voucherCode, purpose, activationDate) {
 
   await page.mouse.click(btnCoords.x, btnCoords.y);
 
-  // Wait for page reload after activation
   await waitForNavigation().catch(() => {});
   await waitForElement(filterInput, 15000);
   await delay(500);
@@ -546,4 +552,5 @@ module.exports = {
   typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, downloadErrorFile, parseErrorExcel,
   checkVoucherByCode, extendVoucherExpiry, deleteVoucher, activateVoucherByCode,
+  isRateLimited, refreshAndWaitForVoucherPage,
 };

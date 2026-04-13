@@ -3,32 +3,24 @@ const {
   click, clickWithEvaluate, typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel,
   checkVoucherByCode, extendVoucherExpiry, deleteVoucher, activateVoucherByCode,
+  refreshAndWaitForVoucherPage,
 } = require('./puppeteerActions');
 const { delay } = require('../utils/delay');
 const logger = require('../utils/logger');
 
 const ESB_BASE_URL = process.env.ESB_BASE_URL || '';
 
-/** Upload mode config: codeMode, file input selector, submit button selector */
 const UPLOAD_MODES = {
   CREATE:   { codeMode: 1, uploadEl: '#fileUpload',      buttonUpload: '#btnSubmitUpload'   },
   ACTIVATE: { codeMode: 3, uploadEl: '#voucherActivate', buttonUpload: '#btnSubmitActivate' },
 };
 
-/**
- * Navigate to /voucher and check if already logged in (logout link present).
- */
 async function checkLoginStatus() {
   logger.info('Checking login status...');
   await launch(`${ESB_BASE_URL}/voucher`);
   return elementExists("a[href='/site/logout']");
 }
 
-/**
- * Fill login form and submit.
- * - Confirmation dialog ("Are you sure"): confirm and wait for navigation.
- * - Error dialog (invalid credentials): throw with isLoginError = true.
- */
 async function loginAction({ username, password }) {
   logger.info('Logging in...');
   await typeInto('#loginform-username', username);
@@ -43,14 +35,12 @@ async function loginAction({ username, password }) {
       if (text && text.trim()) alertText = text.trim();
     } catch (_) {}
 
-    // Confirmation dialog — click OK and wait for navigation
     const isConfirmation = /sure|continue|lanjut|konfirmasi/i.test(alertText);
     if (isConfirmation) {
       logger.info(`Login confirmation dialog: "${alertText}" — confirming...`);
       await click('.swal2-confirm.swal2-styled');
       await waitForNavigation();
     } else {
-      // Error dialog — throw immediately
       const message = alertText || 'Login gagal: username atau password salah.';
       await click('.swal2-confirm.swal2-styled');
       const err = new Error(message);
@@ -58,7 +48,6 @@ async function loginAction({ username, password }) {
       throw err;
     }
   }
-  // Verify login succeeded by checking logout link presence
   const isLoggedIn = await elementExists("a[href='/site/logout']");
   if (!isLoggedIn) {
     const err = new Error('Login gagal: tidak dapat masuk ke halaman voucher. Periksa kredensial ESB.');
@@ -68,17 +57,12 @@ async function loginAction({ username, password }) {
   logger.info('Login successful.');
 }
 
-/** Navigate to /voucher via sidebar menu (Master → Voucher) */
 async function gotoVoucherMenu() {
   logger.info('Navigating to /voucher...');
   await click("a[href='/master/index']");
   await click("a[href='/voucher']");
 }
 
-/**
- * Upload a voucher Excel file to ESB ERP.
- * Downloads and parses the error file if any rows fail.
- */
 async function uploadVoucherExcelFile(filePath, mode) {
   if (!UPLOAD_MODES[mode]) throw new Error(`Invalid mode: ${mode}. Valid: CREATE, ACTIVATE`);
   const { codeMode, uploadEl, buttonUpload } = UPLOAD_MODES[mode];
@@ -129,9 +113,6 @@ async function uploadVoucherExcelFile(filePath, mode) {
   return resultUpload;
 }
 
-/**
- * Check one or more voucher codes via table filter.
- */
 async function checkVoucherCodes(credentials, codes) {
   const isLoggedIn = await checkLoginStatus();
   if (!isLoggedIn) {
@@ -141,12 +122,67 @@ async function checkVoucherCodes(credentials, codes) {
   await delay(1500);
 
   const results = [];
-  for (const code of codes) {
-    const trimmed = code.trim();
+  const MAX_RATE_LIMIT_RETRIES = 3;
+
+  for (let i = 0; i < codes.length; i++) {
+    const trimmed = codes[i].trim();
     if (!trimmed) continue;
-    logger.info(`Check voucher: ${trimmed}`);
-    const data = await checkVoucherByCode(trimmed);
-    results.push(data ? { voucherCode: trimmed, found: true, data } : { voucherCode: trimmed, found: false });
+
+    let rateLimitRetries = 0;
+    let success = false;
+
+    while (!success && rateLimitRetries <= MAX_RATE_LIMIT_RETRIES) {
+      try {
+        logger.info(`Check voucher: ${trimmed}`);
+        const data = await checkVoucherByCode(trimmed);
+        results.push(data
+          ? { voucherCode: trimmed, found: true, data }
+          : { voucherCode: trimmed, found: false }
+        );
+        success = true;
+      } catch (err) {
+        if (err.isRateLimit) {
+          rateLimitRetries++;
+          logger.warn(`Rate limit on "${trimmed}" (attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}) — refreshing page...`);
+
+          const waitMs = rateLimitRetries * 3000;
+          await delay(waitMs);
+
+          const recovered = await refreshAndWaitForVoucherPage();
+          if (!recovered) {
+            logger.info('Session expired after rate limit — re-logging in...');
+            try {
+              const { launch: launchBrowser } = require('./browser');
+              await launchBrowser(`${process.env.ESB_BASE_URL || ''}/voucher`);
+              const stillLoggedIn = await elementExists("a[href='/site/logout']");
+              if (!stillLoggedIn) {
+                await loginAction(credentials);
+                await gotoVoucherMenu();
+              }
+              await delay(1500);
+            } catch (loginErr) {
+              logger.error(`Re-login failed: ${loginErr.message}`);
+              results.push({ voucherCode: trimmed, found: false, error: `Rate limit + re-login gagal: ${loginErr.message}` });
+              success = true;
+            }
+          }
+
+          if (!success) {
+            await delay(1000);
+          }
+
+          if (!success && rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+            logger.error(`Max rate limit retries reached for "${trimmed}"`);
+            results.push({ voucherCode: trimmed, found: false, error: 'Rate limit: max retries exceeded' });
+            success = true;
+          }
+        } else {
+          logger.error(`Check voucher "${trimmed}" failed: ${err.message}`);
+          results.push({ voucherCode: trimmed, found: false, error: err.message });
+          success = true;
+        }
+      }
+    }
   }
 
   try {
@@ -157,10 +193,6 @@ async function checkVoucherCodes(credentials, codes) {
   return results;
 }
 
-/**
- * Extend expiry date for one or more voucher codes.
- * extendVoucherExpiry returns { found, buttonAvailable, status, success } — no throw for business logic errors.
- */
 async function extendVoucherCodes(credentials, codes, newEndDate) {
   const isLoggedIn = await checkLoginStatus();
   if (!isLoggedIn) {
@@ -197,10 +229,6 @@ async function extendVoucherCodes(credentials, codes, newEndDate) {
   return results;
 }
 
-/**
- * Delete one or more vouchers by code.
- * deleteVoucher returns { found, buttonAvailable, status, success } — no throw for business logic errors.
- */
 async function deleteVoucherCodes(credentials, codes, deletionDate) {
   const isLoggedIn = await checkLoginStatus();
   if (!isLoggedIn) {
@@ -224,8 +252,6 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
         results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
       }
     } catch (err) {
-      // "Execution context was destroyed" terjadi saat navigasi setelah delete berhasil.
-      // Voucher sudah terhapus di server, jadi catat sebagai sukses.
       if (err.message && err.message.includes('Execution context was destroyed')) {
         logger.warn(`Delete ${trimmed}: context destroyed after navigation (voucher likely deleted successfully)`);
         results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
@@ -244,11 +270,6 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
   return results;
 }
 
-/**
- * Activate one or more vouchers by code.
- * Flow per code: check status → if 'available' activate directly, else report status to caller.
- * Returns array of { voucherCode, success, reason, status, message }
- */
 async function activateVoucherByCodes(credentials, codes, purpose, activationDate) {
   const isLoggedIn = await checkLoginStatus();
   if (!isLoggedIn) {
@@ -263,7 +284,6 @@ async function activateVoucherByCodes(credentials, codes, purpose, activationDat
     if (!trimmed) continue;
     logger.info(`Activate voucher by code: ${trimmed}`);
     try {
-      // First check the voucher status
       const data = await checkVoucherByCode(trimmed);
       if (!data) {
         results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
@@ -272,12 +292,10 @@ async function activateVoucherByCodes(credentials, codes, purpose, activationDat
 
       const status = (data.status || '').toLowerCase().trim();
       if (status !== 'available') {
-        // Not available — report status, skip activation
         results.push({ voucherCode: trimmed, success: false, reason: 'not_available', status: data.status });
         continue;
       }
 
-      // Status is available — proceed with activation
       const r = await activateVoucherByCode(trimmed, purpose, activationDate);
       if (!r.found) {
         results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });

@@ -5,7 +5,6 @@ const logger = require('../utils/logger');
 let browser = null;
 let page = null;
 
-/** Returns true if the browser process is still alive and connected */
 function isBrowserAlive() {
   try {
     return browser !== null && browser.process() !== null && browser.isConnected();
@@ -14,7 +13,6 @@ function isBrowserAlive() {
   }
 }
 
-/** Clear browser history & cache via Chrome DevTools Protocol */
 async function clearBrowserHistory() {
   try {
     const targets = browser.targets().filter((t) => t.type() === 'page');
@@ -31,10 +29,6 @@ async function clearBrowserHistory() {
   }
 }
 
-/**
- * Close all active tabs except the last one.
- * Keeping at least 1 tab alive avoids an unstable browser state.
- */
 async function closeAllTabs() {
   try {
     const pages = await browser.pages();
@@ -46,7 +40,6 @@ async function closeAllTabs() {
   }
 }
 
-/** Force kill browser and reset state */
 async function forceCloseBrowser() {
   try {
     if (browser) await browser.close();
@@ -61,12 +54,6 @@ async function forceCloseBrowser() {
   }
 }
 
-/**
- * Open browser and navigate to pageUrl.
- * - Reuses existing browser if alive; restarts if dead/disconnected.
- * - Clears history and closes extra tabs before navigating.
- * - SHOW_BROWSER=true shows the browser window; false runs headless.
- */
 async function launch(pageUrl) {
   const userDataDir = path.resolve(__dirname, '../../UserData');
 
@@ -89,7 +76,6 @@ async function launch(pageUrl) {
   await clearBrowserHistory();
   await closeAllTabs();
 
-  // Reuse the surviving tab instead of opening a new one
   const pages = await browser.pages();
   page = pages[pages.length - 1];
 
@@ -97,9 +83,6 @@ async function launch(pageUrl) {
   logger.info(`Navigated to ${pageUrl}`);
 }
 
-/**
- * Close browser — clear history first, then force close.
- */
 async function close() {
   if (browser) {
     await clearBrowserHistory();
@@ -108,10 +91,6 @@ async function close() {
   }
 }
 
-/**
- * Get the active page instance.
- * Throws if launch() has not been called yet.
- */
 function getPage() {
   if (!page) throw new Error('Browser belum diinisialisasi. Panggil launch() terlebih dahulu.');
   return page;

@@ -7,11 +7,6 @@ const logger = require('../utils/logger');
 
 const MAX_RETRIES = 2;
 
-/**
- * Upload all Excel files found in `folderPath` using the given mode (CREATE or ACTIVATE).
- * Per-file errors are recorded as ✗ Failed and do not trigger a retry.
- * Session-level errors trigger a retry up to MAX_RETRIES times.
- */
 async function voucherUploadOrchestrate(config, mode) {
   const { credentials, folderPath } = config;
   const startTime = new Date();
@@ -58,7 +53,6 @@ async function voucherUploadOrchestrate(config, mode) {
       logger.error(`[ATTEMPT ${attempt}/${MAX_RETRIES}] Error: ${err.message}`);
       try { await close(); } catch (_) {}
 
-      // Login errors are permanent — no point retrying
       if (err.isLoginError) {
         logger.warn('Login error detected — skipping retry.');
         throw err;
