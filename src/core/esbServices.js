@@ -76,8 +76,9 @@ async function uploadVoucherExcelFile(filePath, mode) {
   await uploadFile(filePath, uploadEl);
   await delay(1000);
   await clickWithEvaluate(buttonUpload);
+  await delay(2000);
 
-  const resultUpload = await waitForUploadProcess('#data-table-upload-queue > tbody > tr', 'process', 2000);
+  const resultUpload = await waitForUploadProcess('#data-table-upload-queue > tbody > tr', 'process', 2000, 120000);
   const hasFailed = resultUpload.toLowerCase().includes('failed') || resultUpload.toLowerCase().includes('error');
 
   let errorDetails = [];
@@ -145,9 +146,6 @@ async function checkVoucherCodes(credentials, codes) {
           rateLimitRetries++;
           logger.warn(`Rate limit on "${trimmed}" (attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}) — refreshing page...`);
 
-          const waitMs = rateLimitRetries * 3000;
-          await delay(waitMs);
-
           const recovered = await refreshAndWaitForVoucherPage();
           if (!recovered) {
             logger.info('Session expired after rate limit — re-logging in...');
@@ -165,10 +163,6 @@ async function checkVoucherCodes(credentials, codes) {
               results.push({ voucherCode: trimmed, found: false, error: `Rate limit + re-login gagal: ${loginErr.message}` });
               success = true;
             }
-          }
-
-          if (!success) {
-            await delay(1000);
           }
 
           if (!success && rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
@@ -238,26 +232,73 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
   await delay(1500);
 
   const results = [];
-  for (const code of codes) {
-    const trimmed = code.trim();
+  const MAX_RATE_LIMIT_RETRIES = 3;
+
+  for (let i = 0; i < codes.length; i++) {
+    const trimmed = codes[i].trim();
     if (!trimmed) continue;
-    logger.info(`Delete voucher: ${trimmed} | date: ${deletionDate}`);
-    try {
-      const r = await deleteVoucher(trimmed, deletionDate);
-      if (!r.found) {
-        results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
-      } else if (!r.buttonAvailable) {
-        results.push({ voucherCode: trimmed, success: false, reason: 'button_unavailable', status: r.status });
-      } else {
-        results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
-      }
-    } catch (err) {
-      if (err.message && err.message.includes('Execution context was destroyed')) {
-        logger.warn(`Delete ${trimmed}: context destroyed after navigation (voucher likely deleted successfully)`);
-        results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
-      } else {
-        logger.error(`Delete ${trimmed} failed: ${err.message}`);
-        results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+
+    let rateLimitRetries = 0;
+    let success = false;
+
+    while (!success && rateLimitRetries <= MAX_RATE_LIMIT_RETRIES) {
+      try {
+        logger.info(`Delete voucher: ${trimmed} | date: ${deletionDate}`);
+        const r = await deleteVoucher(trimmed, deletionDate);
+        if (!r.found) {
+          results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
+        } else if (!r.buttonAvailable) {
+          results.push({ voucherCode: trimmed, success: false, reason: 'button_unavailable', status: r.status });
+        } else {
+          results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
+        }
+        success = true;
+      } catch (err) {
+        if (err.message && err.message.includes('Execution context was destroyed')) {
+          logger.warn(`Delete ${trimmed}: context destroyed after navigation (voucher likely deleted successfully)`);
+          results.push({ voucherCode: trimmed, success: true, message: 'Berhasil dihapus' });
+          try {
+            const { getPage } = require('./browser');
+            await getPage().waitForSelector(
+              '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]',
+              { timeout: 15000 }
+            );
+            await delay(2000);
+          } catch (_) {}
+          success = true;
+        } else if (err.isRateLimit) {
+          rateLimitRetries++;
+          logger.warn(`Rate limit on delete "${trimmed}" (attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}) — refreshing page...`);
+
+          const recovered = await refreshAndWaitForVoucherPage();
+          if (!recovered) {
+            logger.info('Session expired after rate limit (delete) — re-logging in...');
+            try {
+              const { launch: launchBrowser } = require('./browser');
+              await launchBrowser(`${process.env.ESB_BASE_URL || ''}/voucher`);
+              const stillLoggedIn = await elementExists("a[href='/site/logout']");
+              if (!stillLoggedIn) {
+                await loginAction(credentials);
+                await gotoVoucherMenu();
+              }
+              await delay(1500);
+            } catch (loginErr) {
+              logger.error(`Re-login failed (delete): ${loginErr.message}`);
+              results.push({ voucherCode: trimmed, success: false, reason: 'error', message: `Rate limit + re-login gagal: ${loginErr.message}` });
+              success = true;
+            }
+          }
+
+          if (!success && rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+            logger.error(`Max rate limit retries reached for delete "${trimmed}"`);
+            results.push({ voucherCode: trimmed, success: false, reason: 'error', message: 'Rate limit: max retries exceeded' });
+            success = true;
+          }
+        } else {
+          logger.error(`Delete ${trimmed} failed: ${err.message}`);
+          results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+          success = true;
+        }
       }
     }
   }

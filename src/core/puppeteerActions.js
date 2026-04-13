@@ -193,7 +193,7 @@ async function refreshAndWaitForVoucherPage(timeoutMs = 20000) {
       await page.reload({ waitUntil: 'networkidle2', timeout: timeoutMs });
     }
 
-    await delay(2000);
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: timeoutMs }).catch(() => {});
 
     const hasLoginForm = await page.evaluate(() => !!document.querySelector('#loginform-username'));
     if (hasLoginForm) {
@@ -334,20 +334,68 @@ async function extendVoucherExpiry(voucherCode, newEndDate) {
 async function deleteVoucher(voucherCode, deletionDate) {
   const page = getPage();
   const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
+  const MAX_POLLS = 10;
+  const RATE_LIMIT_CHECK_AFTER = 3;
 
-  await waitForElement(filterInput);
+  let polls = 0;
+  while (true) {
+    const found = await page.evaluate((sel) => !!document.querySelector(sel), filterInput);
+    if (found) break;
+    polls++;
+    if (polls >= RATE_LIMIT_CHECK_AFTER) {
+      const rateLimited = await isRateLimited();
+      if (rateLimited) {
+        const err = new Error(`Rate limit detected while waiting for filter input (delete)`);
+        err.isRateLimit = true;
+        throw err;
+      }
+    }
+    if (polls >= MAX_POLLS) throw new Error(`Element "${filterInput}" not found after ${MAX_POLLS}s`);
+    await delay(1000);
+  }
+
   await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, filterInput);
   await page.type(filterInput, voucherCode);
   await page.keyboard.press('Enter');
-  await delay(1500);
 
-  const rowData = await page.evaluate((code) => {
-    const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
-    if (!row) return null;
-    return { status: row.querySelector('td[data-col-seq="11"]')?.innerText?.trim() || 'unknown' };
-  }, voucherCode);
+  const TABLE_WAIT_MS = 5000;
+  const tableStart = Date.now();
+  let rowFound = false;
 
-  if (!rowData) return { found: false, buttonAvailable: false, status: null, success: false };
+  while (Date.now() - tableStart < TABLE_WAIT_MS) {
+    await delay(500);
+
+    const rateLimited = await isRateLimited();
+    if (rateLimited) {
+      const err = new Error('Rate limit detected while waiting for table after filter (delete)');
+      err.isRateLimit = true;
+      throw err;
+    }
+
+    rowFound = await page.evaluate((code) =>
+      !!document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`),
+      voucherCode
+    );
+    if (rowFound) break;
+  }
+
+  const rowData = rowFound
+    ? await page.evaluate((code) => {
+        const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
+        if (!row) return null;
+        return { status: row.querySelector('td[data-col-seq="11"]')?.innerText?.trim() || 'unknown' };
+      }, voucherCode)
+    : null;
+
+  if (!rowData) {
+    const rateLimited = await isRateLimited();
+    if (rateLimited) {
+      const err = new Error('Rate limit detected after table load (delete)');
+      err.isRateLimit = true;
+      throw err;
+    }
+    return { found: false, buttonAvailable: false, status: null, success: false };
+  }
 
   await page.evaluate((code) => {
     const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
@@ -364,7 +412,7 @@ async function deleteVoucher(voucherCode, deletionDate) {
   await waitForElement('a#btnDelete');
   await clickWithEvaluate('a#btnDelete');
   await waitForElement('#myModalActivate', 10000);
-  await delay(1000);
+  await delay(500);
 
   const purposeCoords = await page.evaluate(() => {
     const sel = document.querySelector('#myModalActivate #w4 span.select2-selection--single');
@@ -375,16 +423,16 @@ async function deleteVoucher(voucherCode, deletionDate) {
   if (!purposeCoords) throw new Error('Select2 Purpose trigger not found in modal #w4');
 
   await page.mouse.click(purposeCoords.x, purposeCoords.y);
-  await delay(800);
+  await delay(500);
 
   await waitForElement('span.select2-container--open', 5000);
   const searchField = 'span.select2-container--open span.select2-search--dropdown input.select2-search__field';
   await waitForElement(searchField, 3000);
 
   await page.type(searchField, 'voucher');
-  await delay(500);
+  await delay(300);
   await page.keyboard.press('Enter');
-  await delay(800);
+  await delay(500);
 
   const dateInput = '#myModalActivate #msvoucher-voucherstartdateactivate-disp';
   await waitForElement(dateInput, 5000);
@@ -397,7 +445,7 @@ async function deleteVoucher(voucherCode, deletionDate) {
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new Event('blur',   { bubbles: true }));
   }, dateInput, deletionDate);
-  await delay(500);
+  await delay(300);
 
   const fields = await page.evaluate((dateSel) => {
     const purposeEl = document.querySelector('#myModalActivate span#select2-purposeIDHead-container');
@@ -416,7 +464,7 @@ async function deleteVoucher(voucherCode, deletionDate) {
     throw new Error('Journal Date belum terisi.');
 
   await page.evaluate(() => document.querySelector('#myModalActivate .panel-body')?.click());
-  await delay(400);
+  await delay(200);
 
   const btnProcess = '#myModalActivate .panel-footer .pull-right a#btnSaveModal';
   await waitForElement(btnProcess, 5000);
@@ -431,9 +479,8 @@ async function deleteVoucher(voucherCode, deletionDate) {
   await page.mouse.click(btnCoords.x, btnCoords.y);
 
   await waitForNavigation().catch(() => {});
-  await delay(500);
   await page.waitForSelector(filterInput, { timeout: 15000 });
-  await delay(500);
+  await delay(800);
 
   logger.info(`Voucher ${voucherCode} deleted | date: ${deletionDate}`);
   return { found: true, buttonAvailable: true, status: rowData.status, success: true };
