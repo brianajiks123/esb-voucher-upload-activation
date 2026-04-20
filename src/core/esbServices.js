@@ -2,7 +2,7 @@ const { launch, close } = require('./browser');
 const {
   click, clickWithEvaluate, typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, waitForNavigation, downloadErrorFile, parseErrorExcel,
-  checkVoucherByCode, extendVoucherExpiry, deleteVoucher, activateVoucherByCode,
+  checkVoucherByCode, extendVoucherExpiry, deleteVoucher, restoreVoucher, activateVoucherByCode,
   refreshAndWaitForVoucherPage,
 } = require('./puppeteerActions');
 const { delay } = require('../utils/delay');
@@ -311,6 +311,94 @@ async function deleteVoucherCodes(credentials, codes, deletionDate) {
   return results;
 }
 
+async function restoreVoucherCodes(credentials, codes, restoreDate) {
+  const isLoggedIn = await checkLoginStatus();
+  if (!isLoggedIn) {
+    await loginAction(credentials);
+    await gotoVoucherMenu();
+  }
+  await delay(1500);
+
+  const results = [];
+  const MAX_RATE_LIMIT_RETRIES = 3;
+
+  for (let i = 0; i < codes.length; i++) {
+    const trimmed = codes[i].trim();
+    if (!trimmed) continue;
+
+    let rateLimitRetries = 0;
+    let success = false;
+
+    while (!success && rateLimitRetries <= MAX_RATE_LIMIT_RETRIES) {
+      try {
+        logger.info(`Restore voucher: ${trimmed} | date: ${restoreDate}`);
+        const r = await restoreVoucher(trimmed, restoreDate);
+        if (!r.found) {
+          results.push({ voucherCode: trimmed, success: false, reason: 'not_found' });
+        } else if (!r.buttonAvailable) {
+          results.push({ voucherCode: trimmed, success: false, reason: 'button_unavailable', status: r.status });
+        } else {
+          results.push({ voucherCode: trimmed, success: true, message: 'Berhasil di-restore' });
+        }
+        success = true;
+      } catch (err) {
+        if (err.message && err.message.includes('Execution context was destroyed')) {
+          logger.warn(`Restore ${trimmed}: context destroyed after navigation (voucher likely restored successfully)`);
+          results.push({ voucherCode: trimmed, success: true, message: 'Berhasil di-restore' });
+          try {
+            const { getPage } = require('./browser');
+            await getPage().waitForSelector(
+              '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]',
+              { timeout: 15000 }
+            );
+            await delay(2000);
+          } catch (_) {}
+          success = true;
+        } else if (err.isRateLimit) {
+          rateLimitRetries++;
+          logger.warn(`Rate limit on restore "${trimmed}" (attempt ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}) — refreshing page...`);
+
+          const recovered = await refreshAndWaitForVoucherPage();
+          if (!recovered) {
+            logger.info('Session expired after rate limit (restore) — re-logging in...');
+            try {
+              const { launch: launchBrowser } = require('./browser');
+              await launchBrowser(`${process.env.ESB_BASE_URL || ''}/voucher`);
+              const stillLoggedIn = await elementExists("a[href='/site/logout']");
+              if (!stillLoggedIn) {
+                await loginAction(credentials);
+                await gotoVoucherMenu();
+              }
+              await delay(1500);
+            } catch (loginErr) {
+              logger.error(`Re-login failed (restore): ${loginErr.message}`);
+              results.push({ voucherCode: trimmed, success: false, reason: 'error', message: `Rate limit + re-login gagal: ${loginErr.message}` });
+              success = true;
+            }
+          }
+
+          if (!success && rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+            logger.error(`Max rate limit retries reached for restore "${trimmed}"`);
+            results.push({ voucherCode: trimmed, success: false, reason: 'error', message: 'Rate limit: max retries exceeded' });
+            success = true;
+          }
+        } else {
+          logger.error(`Restore ${trimmed} failed: ${err.message}`);
+          results.push({ voucherCode: trimmed, success: false, reason: 'error', message: err.message });
+          success = true;
+        }
+      }
+    }
+  }
+
+  try {
+    const { getPage } = require('./browser');
+    await getPage().evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+  } catch (_) {}
+  await close();
+  return results;
+}
+
 async function activateVoucherByCodes(credentials, codes, purpose, activationDate) {
   const isLoggedIn = await checkLoginStatus();
   if (!isLoggedIn) {
@@ -361,5 +449,5 @@ async function activateVoucherByCodes(credentials, codes, purpose, activationDat
 
 module.exports = {
   checkLoginStatus, loginAction, gotoVoucherMenu,
-  uploadVoucherExcelFile, checkVoucherCodes, extendVoucherCodes, deleteVoucherCodes, activateVoucherByCodes,
+  uploadVoucherExcelFile, checkVoucherCodes, extendVoucherCodes, deleteVoucherCodes, restoreVoucherCodes, activateVoucherByCodes,
 };

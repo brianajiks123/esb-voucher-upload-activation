@@ -105,6 +105,7 @@ Low-level DOM helpers and voucher-specific actions:
 - `checkVoucherByCode(code)` — filter table → extract row data (branch, startDate, endDate, minSalesAmount, voucherAmount, voucherSalesPrice, additionalInfo, status)
 - `extendVoucherExpiry(code, newEndDate)` — checkbox → btnUpdate → fill date → confirm → waitForNavigation
 - `deleteVoucher(code, deletionDate)` — checkbox → btnDelete → modal (Purpose via Select2 "voucher" + Journal Date) → Process → waitForNavigation
+- `restoreVoucher(code, restoreDate)` — checkbox → btnRestore → modal (Purpose via Select2 "voucher" + Journal Date) → Process → waitForNavigation
 - `activateVoucherByCode(code, purpose, activationDate)` — checkbox → btnActivate → modal (Purpose via Select2 keyword + Date to Activate) → Save → waitForNavigation
 
 All voucher action functions return `{ found, buttonAvailable, status, success }`.
@@ -121,6 +122,7 @@ High-level ESB operations that manage login, navigation, and delegate to `puppet
 | `checkVoucherCodes(credentials, codes)` | `(creds, string[]) → result[]` | Check one or more codes, return array of results |
 | `extendVoucherCodes(credentials, codes, newEndDate)` | `(creds, string[], string) → result[]` | Extend expiry for one or more codes |
 | `deleteVoucherCodes(credentials, codes, deletionDate)` | `(creds, string[], string) → result[]` | Delete one or more codes |
+| `restoreVoucherCodes(credentials, codes, restoreDate)` | `(creds, string[], string) → result[]` | Restore one or more codes (Purpose + Journal Date modal) |
 | `activateVoucherByCodes(credentials, codes, purpose, activationDate)` | `(creds, string[], string, string) → result[]` | Check status per code → activate if `available` |
 
 `activateVoucherByCodes` performs a silent status check before activation:

@@ -12,6 +12,7 @@ CLI tool and library for managing vouchers on ESB ERP via Puppeteer browser auto
 | CHECK            | `checkVoucherCodes`          | No (library)  |
 | EXTEND           | `extendVoucherCodes`         | No (library)  |
 | DELETE           | `deleteVoucherCodes`         | No (library)  |
+| RESTORE          | `restoreVoucherCodes`        | No (library)  |
 
 ---
 
@@ -223,6 +224,52 @@ For each code:
    10. waitForNavigation → page.waitForSelector(filterInput, { timeout: 15000 })
        Note: "Execution context was destroyed" after navigation is treated as success
              (voucher already deleted server-side)
+   11. Return { found: true, buttonAvailable: true, status, success: true }
+        │
+        ▼
+Clear localStorage + sessionStorage → close()
+        │
+        ▼
+Return results[]
+```
+
+---
+
+## RESTORE Flow
+
+```
+restoreVoucherCodes(credentials, codes, restoreDate)
+        │
+        ▼
+checkLoginStatus() → launch browser → navigate to /voucher
+        │
+   ┌────┴────┐
+Logged in   Not logged in → loginAction() → gotoVoucherMenu()
+        │
+        ▼
+delay(1500)
+        │
+        ▼
+For each code:
+  restoreVoucher(code, restoreDate)
+    1. Filter table by code → verify row exists → get status
+       └─ Not found → { found: false, buttonAvailable: false, status: null, success: false }
+    2. Check row checkbox
+    3. Check if a#btnRestore[href="/voucher/restore"] exists
+       └─ NOT found → { found: true, buttonAvailable: false, status, success: false }
+    4. waitForElement('a#btnRestore[href="/voucher/restore"]')
+       → clickWithEvaluate('a#btnRestore[href="/voucher/restore"]')
+       → waitForElement('#myModalActivate', 10000)
+    5. Open Select2 Purpose dropdown (native mouse click via getBoundingClientRect on #w4)
+       → type "voucher" → Enter to select
+    6. Fill Journal Date (#msvoucher-voucherstartdateactivate-disp, DD-MM-YYYY)
+       via page.evaluate (input + change + blur events)
+    7. Verify Purpose and Date fields are filled
+    8. Click outside to dismiss picker
+    9. Click Process (a#btnSaveModal, native mouse click via getBoundingClientRect)
+   10. waitForNavigation → page.waitForSelector(filterInput, { timeout: 15000 })
+       Note: "Execution context was destroyed" after navigation is treated as success
+             (voucher already restored server-side)
    11. Return { found: true, buttonAvailable: true, status, success: true }
         │
         ▼

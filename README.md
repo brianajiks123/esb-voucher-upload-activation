@@ -9,6 +9,7 @@ Supports the following operations:
 - **CHECK** — check voucher status and info by code
 - **EXTEND** — extend voucher expiry date
 - **DELETE** — delete vouchers
+- **RESTORE** — restore vouchers
 
 > Used as a library by `bot-voucher-esb`. The CREATE and ACTIVATE (file) modes are also available as CLI commands.
 
@@ -92,6 +93,7 @@ When used as a library by `bot-voucher-esb`, the following functions are availab
 | `checkVoucherCodes(credentials, codes)` | Check status and info for one or more voucher codes |
 | `extendVoucherCodes(credentials, codes, newEndDate)` | Extend expiry date for one or more vouchers |
 | `deleteVoucherCodes(credentials, codes, deletionDate)` | Delete one or more vouchers |
+| `restoreVoucherCodes(credentials, codes, restoreDate)` | Restore one or more vouchers (Purpose + Journal Date modal) |
 | `activateVoucherByCodes(credentials, codes, purpose, activationDate)` | Activate vouchers by code with Purpose + Date |
 | `uploadVoucherExcelFile(filePath, mode)` | Upload a single Excel file (used by orchestrator) |
 

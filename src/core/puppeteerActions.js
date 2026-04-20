@@ -486,6 +486,163 @@ async function deleteVoucher(voucherCode, deletionDate) {
   return { found: true, buttonAvailable: true, status: rowData.status, success: true };
 }
 
+// ─── Voucher Restore ─────────────────────────────────────────────────────────
+
+async function restoreVoucher(voucherCode, restoreDate) {
+  const page = getPage();
+  const filterInput = '#grid-voucher-container thead tr#grid-voucher-filters input[name="MsVoucher[voucherID]"]';
+  const MAX_POLLS = 10;
+  const RATE_LIMIT_CHECK_AFTER = 3;
+
+  let polls = 0;
+  while (true) {
+    const found = await page.evaluate((sel) => !!document.querySelector(sel), filterInput);
+    if (found) break;
+    polls++;
+    if (polls >= RATE_LIMIT_CHECK_AFTER) {
+      const rateLimited = await isRateLimited();
+      if (rateLimited) {
+        const err = new Error(`Rate limit detected while waiting for filter input (restore)`);
+        err.isRateLimit = true;
+        throw err;
+      }
+    }
+    if (polls >= MAX_POLLS) throw new Error(`Element "${filterInput}" not found after ${MAX_POLLS}s`);
+    await delay(1000);
+  }
+
+  await page.evaluate((sel) => { document.querySelector(sel).value = ''; }, filterInput);
+  await page.type(filterInput, voucherCode);
+  await page.keyboard.press('Enter');
+
+  const TABLE_WAIT_MS = 5000;
+  const tableStart = Date.now();
+  let rowFound = false;
+
+  while (Date.now() - tableStart < TABLE_WAIT_MS) {
+    await delay(500);
+
+    const rateLimited = await isRateLimited();
+    if (rateLimited) {
+      const err = new Error('Rate limit detected while waiting for table after filter (restore)');
+      err.isRateLimit = true;
+      throw err;
+    }
+
+    rowFound = await page.evaluate((code) =>
+      !!document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`),
+      voucherCode
+    );
+    if (rowFound) break;
+  }
+
+  const rowData = rowFound
+    ? await page.evaluate((code) => {
+        const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
+        if (!row) return null;
+        return { status: row.querySelector('td[data-col-seq="11"]')?.innerText?.trim() || 'unknown' };
+      }, voucherCode)
+    : null;
+
+  if (!rowData) {
+    const rateLimited = await isRateLimited();
+    if (rateLimited) {
+      const err = new Error('Rate limit detected after table load (restore)');
+      err.isRateLimit = true;
+      throw err;
+    }
+    return { found: false, buttonAvailable: false, status: null, success: false };
+  }
+
+  await page.evaluate((code) => {
+    const row = document.querySelector(`#grid-voucher-container table.kv-grid-table tbody tr[data-key="${code}"]`);
+    const cb = row?.querySelector('td[data-col-seq="12"] input[type="checkbox"].kv-row-checkbox');
+    if (cb && !cb.checked) cb.click();
+  }, voucherCode);
+  await delay(500);
+
+  const btnRestoreExists = await elementExists('a#btnRestore[href="/voucher/restore"]');
+  if (!btnRestoreExists) {
+    return { found: true, buttonAvailable: false, status: rowData.status, success: false };
+  }
+
+  await waitForElement('a#btnRestore[href="/voucher/restore"]');
+  await clickWithEvaluate('a#btnRestore[href="/voucher/restore"]');
+  await waitForElement('#myModalActivate', 10000);
+  await delay(500);
+
+  const purposeCoords = await page.evaluate(() => {
+    const sel = document.querySelector('#myModalActivate #w4 span.select2-selection--single');
+    if (!sel) return null;
+    const r = sel.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  if (!purposeCoords) throw new Error('Select2 Purpose trigger not found in modal #w4');
+
+  await page.mouse.click(purposeCoords.x, purposeCoords.y);
+  await delay(500);
+
+  await waitForElement('span.select2-container--open', 5000);
+  const searchField = 'span.select2-container--open span.select2-search--dropdown input.select2-search__field';
+  await waitForElement(searchField, 3000);
+
+  await page.type(searchField, 'voucher');
+  await delay(300);
+  await page.keyboard.press('Enter');
+  await delay(500);
+
+  const dateInput = '#myModalActivate #msvoucher-voucherstartdateactivate-disp';
+  await waitForElement(dateInput, 5000);
+  await page.evaluate((sel, val) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    el.value = '';
+    el.value = val;
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur',   { bubbles: true }));
+  }, dateInput, restoreDate);
+  await delay(300);
+
+  const fields = await page.evaluate((dateSel) => {
+    const purposeEl = document.querySelector('#myModalActivate span#select2-purposeIDHead-container');
+    const dateEl    = document.querySelector(dateSel);
+    return {
+      purpose: purposeEl?.textContent.trim() || '',
+      date:    dateEl?.value.trim() || '',
+    };
+  }, dateInput);
+
+  logger.info(`Restore modal — Purpose: "${fields.purpose}" | Date: "${fields.date}"`);
+
+  if (!fields.purpose || fields.purpose === '- Select Purpose -')
+    throw new Error(`Purpose belum terpilih: "${fields.purpose}"`);
+  if (!fields.date)
+    throw new Error('Journal Date belum terisi.');
+
+  await page.evaluate(() => document.querySelector('#myModalActivate .panel-body')?.click());
+  await delay(200);
+
+  const btnProcess = '#myModalActivate .panel-footer .pull-right a#btnSaveModal';
+  await waitForElement(btnProcess, 5000);
+  const btnCoords = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, btnProcess);
+  if (!btnCoords) throw new Error('Tombol Process tidak ditemukan.');
+
+  await page.mouse.click(btnCoords.x, btnCoords.y);
+
+  await waitForNavigation().catch(() => {});
+  await page.waitForSelector(filterInput, { timeout: 15000 });
+  await delay(800);
+
+  logger.info(`Voucher ${voucherCode} restored | date: ${restoreDate}`);
+  return { found: true, buttonAvailable: true, status: rowData.status, success: true };
+}
+
 // ─── Voucher Activate by Code ─────────────────────────────────────────────────
 
 async function activateVoucherByCode(voucherCode, purpose, activationDate) {
@@ -598,6 +755,6 @@ module.exports = {
   waitForElement, waitForNavigation, click, clickWithEvaluate,
   typeInto, uploadFile, elementExists, getTextContent,
   waitForUploadProcess, downloadErrorFile, parseErrorExcel,
-  checkVoucherByCode, extendVoucherExpiry, deleteVoucher, activateVoucherByCode,
+  checkVoucherByCode, extendVoucherExpiry, deleteVoucher, restoreVoucher, activateVoucherByCode,
   isRateLimited, refreshAndWaitForVoucherPage,
 };
